@@ -33,7 +33,12 @@ def run(defended: bool, backend_name: str | None, clean: bool = False) -> dict:
         guarded |= set(s)
 
     backend = make_backend(backend_name)
-    guards = GuardEnsemble(k=3, backend=backend)
+    # Use genuinely different models per guard where the provider offers them, so
+    # the ensemble is heterogeneous (a blind spot in one is not shared by all).
+    guard_models: tuple[str, ...] = ()
+    if getattr(backend, "provider", None) == "groq":
+        guard_models = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
+    guards = GuardEnsemble(k=3, backend=backend, models=guard_models)
     order = list(nx.topological_sort(m.graph))
 
     print(f"=== {'DEFENDED' if defended else 'UNDEFENDED'} run "
@@ -60,8 +65,11 @@ def run(defended: bool, backend_name: str | None, clean: bool = False) -> dict:
                 blocked_at.append(node)
                 note = f"  <-- GUARDS BLOCK (votes={votes}) + ContextWipe"
         outputs[node] = out
-        flag = "  [CANARY]" if is_compromised(out) else ""
-        print(f"  {node:>12}: {out}{flag}{note}")
+        flag = "  [CANARY]" if is_compromised(out) else "  [clean]"
+        shown = " ".join(out.split())
+        if len(shown) > 200:
+            shown = shown[:200] + " ..."
+        print(f"  {node:>12}:{flag} {shown}{note}")
 
     orch_out = outputs.get("orchestrator", "")
     rep_out = outputs.get("reporter", "")

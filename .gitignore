@@ -16,3 +16,6 @@ demo/.env
 # Outputs
 plots/*.png
 experiments/results/
+
+# Session handoff tracking (auto-generated, machine-local)
+.handoff/

@@ -26,7 +26,7 @@ from demo.target_mock import CANARY
 PROVIDERS = {
     "groq": (
         "https://api.groq.com/openai/v1/chat/completions",
-        "llama-3.1-8b-instant",
+        "openai/gpt-oss-20b",
         "GROQ_API_KEY",
     ),
     "openrouter": (
@@ -75,6 +75,7 @@ class HTTPBackend:
     model: str | None = None
     temperature: float = 0.0
     timeout: float = 30.0
+    max_retries: int = 5
 
     def __post_init__(self) -> None:
         if self.provider not in PROVIDERS:
@@ -104,8 +105,21 @@ class HTTPBackend:
             ],
         }
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        r = httpx.post(self.url, json=payload, headers=headers, timeout=self.timeout)
-        r.raise_for_status()
+        # Free tiers rate-limit by requests/min; retry 429 (and transient 5xx)
+        # honouring Retry-After, with exponential backoff.
+        import time
+
+        delay = 2.0
+        for attempt in range(self.max_retries + 1):
+            r = httpx.post(self.url, json=payload, headers=headers, timeout=self.timeout)
+            if r.status_code in (429, 500, 502, 503) and attempt < self.max_retries:
+                wait = float(r.headers.get("retry-after", delay))
+                time.sleep(min(wait, 30.0))
+                delay *= 2
+                continue
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        r.raise_for_status()  # exhausted retries
         return r.json()["choices"][0]["message"]["content"].strip()
 
 
