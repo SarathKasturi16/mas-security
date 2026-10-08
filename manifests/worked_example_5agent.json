@@ -1,0 +1,20 @@
+{
+  "name": "worked_example_5agent",
+  "description": "Review-1 slides 12/13 worked example: 5 agents A1..A5, weights 1/2.5/4/2.5/1, bags {A1,A2},{A2,A3,A4},{A4,A5}, separators S1={A2} S2={A4}, entry checkpoint S0. Expected rho 11/7.5/1; risk allocation at B=10 -> 5.64/3.85/0.51.",
+  "source": "Review-1 slides 12/13 (presentation-script-qa.tex)",
+  "budget": 10.0,
+  "agents": {
+    "A1": { "label": "UserAgent",   "caps": [] },
+    "A2": { "label": "PlanAgent",   "caps": ["tool_exec"] },
+    "A3": { "label": "CodeAgent",   "caps": ["shell", "file_write"] },
+    "A4": { "label": "ToolAgent",   "caps": ["tool_exec"] },
+    "A5": { "label": "ReportAgent", "caps": [] }
+  },
+  "edges": [
+    { "from": "A1", "to": "A2", "source": "slide" },
+    { "from": "A2", "to": "A3", "source": "slide" },
+    { "from": "A3", "to": "A4", "source": "slide" },
+    { "from": "A4", "to": "A5", "source": "slide" }
+  ],
+  "entry": ["A1"]
+}
