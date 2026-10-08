@@ -95,6 +95,8 @@ def _bisect(G: nx.Graph, nodes: list) -> tuple[list, list]:
 
 def metis_linear_order(G: nx.Graph) -> list:
     """Linear ordering by recursive METIS bisection (KL fallback on failure)."""
+    global METIS_FALLBACK_USED
+    METIS_FALLBACK_USED = False  # reflect only this call, not a past transient failure
 
     def rec(nodes: list) -> list:
         if len(nodes) <= 2:

@@ -51,7 +51,7 @@ class GuardEnsemble:
         votes = []
         models = self.models or (self.backend.model,) * self.k
         for mdl in list(models)[: self.k]:
-            ans = self.backend.complete(f"guard::{_GUARD_PROMPT}", text)
+            ans = self.backend.complete(f"guard::{_GUARD_PROMPT}", text, model=mdl)
             votes.append("BLOCK" in ans.upper())
         return votes
 

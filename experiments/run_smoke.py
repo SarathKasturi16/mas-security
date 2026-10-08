@@ -28,12 +28,17 @@ SEED = 7
 
 
 def checkpoints_and_rhos(m):
-    """Return (checkpoint node-sets [S0, S1, ...], rho per checkpoint)."""
+    """Return (checkpoint node-sets [S0, S1, ...], rho per checkpoint).
+
+    Uses the de-duplicated ``checkpoints`` (distinct separator node sets) so the
+    budget is matched over distinct audit sites, not over repeated ones.
+    """
     d = decompose(m)
     s0 = entry_checkpoint(m)
-    cps = [s0] + [set(s) for s in d["separators"]]
+    seps = d["checkpoints"]
+    cps = [s0] + [set(s) for s in seps]
     rhos = [blast_radius(m, s0, include_self=True)]
-    rhos += [blast_radius(m, s, include_self=False) for s in d["separators"]]
+    rhos += [blast_radius(m, s, include_self=False) for s in seps]
     return cps, rhos
 
 

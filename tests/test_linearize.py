@@ -39,3 +39,18 @@ def test_validator_rejects_bad():
     assert not is_valid_path_decomposition(G, [{0, 1}])  # vertex 2 missing
     assert not is_valid_path_decomposition(G, [{0}, {1}, {2}])  # edges uncovered
     assert not is_valid_path_decomposition(G, [{0, 1}, {1, 2}, {0, 2}])  # not contiguous
+
+
+def test_no_duplicate_separators_pentest7():
+    """Regression: path_decomposition must not emit redundant adjacent-subset bags
+    nor should the deduped checkpoint list repeat a node set (code-review #1)."""
+    from engine.manifest import load_manifest
+    m = load_manifest("manifests/pentest7_poc.json")
+    d = decompose(m)
+    # raw bags: none is a subset of an adjacent bag
+    bags = d["bags"]
+    for i in range(len(bags) - 1):
+        assert not (bags[i] <= bags[i + 1]) and not (bags[i + 1] <= bags[i])
+    # deduped checkpoints are pairwise-distinct node sets
+    keys = [frozenset(s) for s in d["checkpoints"]]
+    assert len(keys) == len(set(keys))

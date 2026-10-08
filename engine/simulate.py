@@ -63,12 +63,18 @@ def simulate(
     total_w = float(w.sum())
     block = np.array([checkpoint_block.get(v, 0.0) for v in nodes], dtype=float)
     shell = np.array([("shell" in g.nodes[v].get("caps", [])) for v in nodes])
-    orch = np.array(
-        [
-            ("rchestr" in str(g.nodes[v].get("label", ""))) or v == "orchestrator"
-            for v in nodes
-        ]
-    )
+    # p_orch tracks compromise of the manifest-declared critical set. Declaring it
+    # in the manifest (not inferring it from a label) keeps the metric meaningful
+    # on label-free synthetic graphs and on MAPTA/xOffense. If none is declared we
+    # fall back to the legacy "orchestrator" name/label match for back-compat.
+    critical = set(getattr(manifest, "critical", []) or [])
+    if critical:
+        orch = np.array([v in critical for v in nodes])
+    else:
+        orch = np.array(
+            [("rchestr" in str(g.nodes[v].get("label", ""))) or v == "orchestrator"
+             for v in nodes]
+        )
     entry = [idx[v] for v in manifest.entry]
     if not entry:
         raise ValueError("manifest has no entry agents")

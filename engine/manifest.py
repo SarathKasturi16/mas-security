@@ -42,6 +42,7 @@ class Manifest:
     name: str
     graph: nx.DiGraph           # nodes carry 'label', 'caps', 'weight'
     entry: list[str]
+    critical: list[str] = field(default_factory=list)
     budget: float = 10.0
     description: str = ""
     source: str = ""
@@ -93,10 +94,16 @@ def load_manifest(path: str | Path) -> Manifest:
         if a not in g:
             raise ValueError(f"entry references undeclared agent '{a}' in {path}")
 
+    critical = list(data.get("critical", []))
+    for a in critical:
+        if a not in g:
+            raise ValueError(f"critical references undeclared agent '{a}' in {path}")
+
     return Manifest(
         name=data["name"],
         graph=g,
         entry=entry,
+        critical=critical,
         budget=float(data.get("budget", 10.0)),
         description=data.get("description", ""),
         source=data.get("source", ""),

@@ -4,17 +4,60 @@
   "source": "Review-1 slides 12/13 (presentation-script-qa.tex)",
   "budget": 10.0,
   "agents": {
-    "A1": { "label": "UserAgent",   "caps": [] },
-    "A2": { "label": "PlanAgent",   "caps": ["tool_exec"] },
-    "A3": { "label": "CodeAgent",   "caps": ["shell", "file_write"] },
-    "A4": { "label": "ToolAgent",   "caps": ["tool_exec"] },
-    "A5": { "label": "ReportAgent", "caps": [] }
+    "A1": {
+      "label": "UserAgent",
+      "caps": []
+    },
+    "A2": {
+      "label": "PlanAgent",
+      "caps": [
+        "tool_exec"
+      ]
+    },
+    "A3": {
+      "label": "CodeAgent",
+      "caps": [
+        "shell",
+        "file_write"
+      ]
+    },
+    "A4": {
+      "label": "ToolAgent",
+      "caps": [
+        "tool_exec"
+      ]
+    },
+    "A5": {
+      "label": "ReportAgent",
+      "caps": []
+    }
   },
   "edges": [
-    { "from": "A1", "to": "A2", "source": "slide" },
-    { "from": "A2", "to": "A3", "source": "slide" },
-    { "from": "A3", "to": "A4", "source": "slide" },
-    { "from": "A4", "to": "A5", "source": "slide" }
+    {
+      "from": "A1",
+      "to": "A2",
+      "source": "slide"
+    },
+    {
+      "from": "A2",
+      "to": "A3",
+      "source": "slide"
+    },
+    {
+      "from": "A3",
+      "to": "A4",
+      "source": "slide"
+    },
+    {
+      "from": "A4",
+      "to": "A5",
+      "source": "slide"
+    }
   ],
-  "entry": ["A1"]
+  "entry": [
+    "A1"
+  ],
+  "critical": [
+    "A3"
+  ]
 }

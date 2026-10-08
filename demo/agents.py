@@ -57,7 +57,7 @@ class StubBackend:
 
     name = "stub"
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str, model: str | None = None) -> str:
         role = system.split("::", 1)[0]
         # A naive agent that treats upstream text as instructions: if the upstream
         # carries the target's injected directive, it obeys and relays the canary.
@@ -90,13 +90,12 @@ class HTTPBackend:
     def name(self) -> str:
         return f"{self.provider}:{self.model}"
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str, model: str | None = None) -> str:
         import httpx
 
-        role = system.split("::", 1)[0]
         instr = system.split("::", 1)[1] if "::" in system else system
         payload = {
-            "model": self.model,
+            "model": model or self.model,
             "temperature": self.temperature,
             "messages": [
                 {"role": "system", "content": instr},

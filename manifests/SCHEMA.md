@@ -16,7 +16,8 @@ single source of truth the engine consumes — "adapt to a new scenario = edit t
   "edges": [
     { "from": "A1", "to": "A2", "source": "paper fig 2 | inferred" }
   ],
-  "entry": ["A1"]                        // agents that directly ingest attacker-controlled data
+  "entry": ["A1"],                       // agents that directly ingest attacker-controlled data
+  "critical": ["A3"]                     // high-value agents; drives the P(critical compromised) metric
 }
 ```
 
@@ -34,3 +35,7 @@ change its own weight.
 - Every entry agent must be a declared agent.
 - An edge `from -> to` means `to` ingests `from`'s output (data-flow direction).
 - Mark any edge not stated in the source paper with `"source": "inferred"`.
+- `critical` is optional; it is the agent set whose compromise `simulate` reports
+  as `p_orch` (e.g. the orchestrator, or the highest-privilege agent). Declare it
+  explicitly — it is never inferred from a label, so the metric is meaningful on
+  label-free synthetic graphs too.

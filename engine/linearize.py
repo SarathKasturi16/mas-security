@@ -35,6 +35,29 @@ def path_decomposition(G: nx.Graph, order: list) -> list[set]:
     for v in sorted(order, key=rank.get):
         bags.append({v} | {u for u in T.neighbors(v) if rank[u] > rank[v]})
 
+    _prune_adjacent_subsets(bags)
+
+    # Repair contiguity: extend each vertex over its first..last occurrence range.
+    first: dict = {}
+    last: dict = {}
+    for i, bag in enumerate(bags):
+        for v in bag:
+            first.setdefault(v, i)
+            last[v] = i
+    for v in first:
+        for i in range(first[v], last[v] + 1):
+            bags[i].add(v)
+
+    # The repair can re-introduce adjacent subsets (and duplicate bags), which
+    # would inflate the checkpoint count and create duplicate separators. Prune
+    # again to a non-redundant path decomposition. Removing a bag that is a
+    # subset of its neighbour preserves coverage and contiguity.
+    _prune_adjacent_subsets(bags)
+    return bags
+
+
+def _prune_adjacent_subsets(bags: list[set]) -> None:
+    """Drop any bag that is a subset of an adjacent bag, in place, to fixpoint."""
     changed = True
     while changed and len(bags) > 1:
         changed = False
@@ -47,17 +70,6 @@ def path_decomposition(G: nx.Graph, order: list) -> list[set]:
                 del bags[i + 1]
                 changed = True
                 break
-
-    first: dict = {}
-    last: dict = {}
-    for i, bag in enumerate(bags):
-        for v in bag:
-            first.setdefault(v, i)
-            last[v] = i
-    for v in first:
-        for i in range(first[v], last[v] + 1):
-            bags[i].add(v)
-    return bags
 
 
 def separators(bags: list[set]) -> list[set]:
@@ -80,9 +92,32 @@ def is_valid_path_decomposition(G: nx.Graph, bags: list[set]) -> bool:
     return True
 
 
+def dedup_separators(seps: list[set]) -> list[set]:
+    """Collapse separators that are the same vertex set to distinct checkpoints.
+
+    Two cuts at different path positions can have an identical node set — the
+    same agents. Auditing that set once suffices, so for budget allocation the
+    checkpoint unit is the distinct separator node set (first occurrence kept).
+    """
+    out: list[set] = []
+    seen: set[frozenset] = set()
+    for s in seps:
+        key = frozenset(s)
+        if key not in seen:
+            seen.add(key)
+            out.append(set(s))
+    return out
+
+
 def decompose(manifest) -> dict:
-    """Min-fill path decomposition of a manifest: order, bags, separators."""
+    """Min-fill path decomposition of a manifest: order, bags, separators.
+
+    ``separators`` is the raw per-adjacent-pair list (may repeat a node set);
+    ``checkpoints`` is the de-duplicated list used as the allocation unit.
+    """
     G = manifest.undirected()
     order = min_fill_order(G)
     bags = path_decomposition(G, order)
-    return {"order": order, "bags": bags, "separators": separators(bags)}
+    seps = separators(bags)
+    return {"order": order, "bags": bags, "separators": seps,
+            "checkpoints": dedup_separators(seps)}

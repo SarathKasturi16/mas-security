@@ -24,6 +24,8 @@ def risk_prioritized(
     n = len(rhos)
     if n == 0:
         raise ValueError("no checkpoints to allocate to")
+    if any(r < 0 for r in rhos):
+        raise ValueError("blast radii (rhos) must be non-negative")
     if B > q_max * n + 1e-12:
         raise ValueError(f"infeasible: B={B} exceeds q_max*n={q_max * n}")
     q = [0.0] * n
