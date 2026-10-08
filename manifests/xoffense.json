@@ -1,0 +1,24 @@
+{
+  "name": "xoffense",
+  "description": "xOffense autonomous pentest framework (arXiv:2509.13021 v1, Sec 4.1). Five core components. The Action Executor runs commands against the target (ingests attacker-controlled banners/responses); the Information Aggregator is the phase hand-off that consolidates completed-phase outputs (attacker-origin text) into directives for the next phase -- the headline checkpoint site. The Task Orchestrator builds/updates the Task Coordination Graph and is the critical coordinating component.",
+  "source": "xOffense, arXiv:2509.13021 v1, Section 4.1 (core components) + 4.2 (phase agents)",
+  "budget": 10.0,
+  "agents": {
+    "action_executor":       { "label": "Action Executor",       "caps": ["shell", "tool_exec", "egress"] },
+    "command_synthesizer":   { "label": "Command Synthesizer",   "caps": ["tool_exec"] },
+    "task_orchestrator":     { "label": "Task Orchestrator",     "caps": ["spawn"] },
+    "knowledge_repository":  { "label": "Knowledge Repository",  "caps": ["file_write"] },
+    "information_aggregator":{ "label": "Information Aggregator", "caps": ["file_write"] }
+  },
+  "edges": [
+    { "from": "command_synthesizer",   "to": "action_executor",        "source": "Sec 4.1: Command Synthesizer -> Action Executor (tool commands)" },
+    { "from": "action_executor",       "to": "task_orchestrator",      "source": "Sec 4.1: Action Executor -> Task Orchestrator (filtered insights/feedback)" },
+    { "from": "action_executor",       "to": "knowledge_repository",   "source": "Sec 4.1: Knowledge Repository stores task results (ingests tool outputs)" },
+    { "from": "action_executor",       "to": "information_aggregator", "source": "Sec 4.1: Information Aggregator consolidates completed-phase outputs" },
+    { "from": "knowledge_repository",  "to": "task_orchestrator",      "source": "Sec 4.1: Knowledge Repository -> Task Orchestrator (top-k retrieved cases)" },
+    { "from": "information_aggregator","to": "task_orchestrator",      "source": "Sec 4.1: Information Aggregator -> next-phase planner (Task Orchestrator)" },
+    { "from": "task_orchestrator",     "to": "command_synthesizer",    "source": "Sec 4.1: Task Orchestrator -> Command Synthesizer (task directives)" }
+  ],
+  "entry": ["action_executor"],
+  "critical": ["task_orchestrator"]
+}

@@ -6,3 +6,5 @@
 [2026-10-09T00:13:57+05:30] session=d1aa20c9 branch=master
     dirty: .handoff/ 
     head: Live demo pipeline, guard ensemble, smoke experiment
+[2026-10-09T00:21:00+05:30] session=d1aa20c9 branch=master
+    head: Address review-gate findings (code + architecture)

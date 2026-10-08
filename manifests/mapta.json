@@ -1,0 +1,22 @@
+{
+  "name": "mapta",
+  "description": "MAPTA multi-agent web pentest system (arXiv:2508.20816 v1). Coordinator hub does attack-path reasoning, tool orchestration and report synthesis, and spawns Sandbox agents. Sandbox agents (1..N share one per-job Docker container) send requests to the target (curl) and ingest attacker-controlled responses. The Validation agent verifies PoCs by concrete execution against the target. Two sandbox instances model the 1..N fan-out. Coordinator is the critical node.",
+  "source": "MAPTA, arXiv:2508.20816 v1 (Coordinator tools: sandbox_agent/run_command/run_python/email/slack; Sandbox: run_command/run_python; Validation: PoC execution)",
+  "budget": 10.0,
+  "agents": {
+    "coordinator": { "label": "Coordinator Agent", "caps": ["shell", "tool_exec", "spawn", "egress"] },
+    "sandbox_1":   { "label": "Sandbox Agent 1",   "caps": ["shell", "tool_exec", "egress"] },
+    "sandbox_2":   { "label": "Sandbox Agent 2",   "caps": ["shell", "tool_exec", "egress"] },
+    "validation":  { "label": "Validation Agent",  "caps": ["shell", "tool_exec"] }
+  },
+  "edges": [
+    { "from": "coordinator", "to": "sandbox_1",   "source": "Coordinator -> Sandbox via sandbox_agent (task dispatch)" },
+    { "from": "coordinator", "to": "sandbox_2",   "source": "Coordinator -> Sandbox via sandbox_agent (task dispatch)" },
+    { "from": "coordinator", "to": "validation",  "source": "Coordinator hands PoC to Validation agent" },
+    { "from": "sandbox_1",   "to": "coordinator", "source": "Sandbox outputs (target-derived observations) return to Coordinator" },
+    { "from": "sandbox_2",   "to": "coordinator", "source": "Sandbox outputs (target-derived observations) return to Coordinator" },
+    { "from": "validation",  "to": "coordinator", "source": "Validation returns pass/fail + evidence to Coordinator" }
+  ],
+  "entry": ["sandbox_1", "sandbox_2", "validation"],
+  "critical": ["coordinator"]
+}
