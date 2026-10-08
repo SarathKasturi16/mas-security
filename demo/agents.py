@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from demo.target_mock import CANARY
 
@@ -108,8 +109,18 @@ class HTTPBackend:
         return r.json()["choices"][0]["message"]["content"].strip()
 
 
+def _load_env() -> None:
+    """Load demo/.env (gitignored) so MAS_BACKEND and *_API_KEY are picked up."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).parent / ".env")
+    except Exception:
+        pass
+
+
 def make_backend(name: str | None = None):
     """Build a backend from an explicit name or the MAS_BACKEND env var."""
+    _load_env()
     name = (name or os.environ.get("MAS_BACKEND", "stub")).lower()
     if name == "stub":
         return StubBackend()
