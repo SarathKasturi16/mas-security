@@ -6,24 +6,39 @@
 Backend via --backend or MAS_BACKEND (stub|groq|openrouter|gemini). The stub
 backend runs offline and deterministically. Same payload and topology in both
 modes; the only difference is whether checkpoints audit the hand-offs.
+
+The pipeline lives in ``iter_run`` as a stream of structured events; both this
+CLI and the browser GUI (demo/server.py) consume it, so they never drift.
 """
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
 
 import networkx as nx
 
 from demo.agents import Agent, make_backend
 from demo.guards_live import GuardEnsemble
-from demo.target_mock import CANARY, get_target_output, is_compromised
+from demo.target_mock import get_target_output, is_compromised
 from engine.linearize import decompose
 from engine.manifest import load_manifest
 from engine.metrics import entry_checkpoint
 
 MANIFEST = "manifests/pentest7_poc.json"
 
+# Distinct models per guard when the provider offers them (heterogeneous vote).
+GROQ_GUARD_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
 
-def run(defended: bool, backend_name: str | None, clean: bool = False) -> dict:
+
+def iter_run(
+    defended: bool, backend_name: str | None = None, clean: bool = False
+) -> Iterator[dict]:
+    """Run the pipeline, yielding JSON-safe events as each step happens.
+
+    Events: ``run_start``, ``agent_start``, ``guard_vote`` (defended guarded
+    nodes only), ``agent_output``, ``run_end``. The GUI and the CLI both consume
+    this so the pipeline logic exists in exactly one place.
+    """
     m = load_manifest(MANIFEST)
     d = decompose(m)
     entry = entry_checkpoint(m)
@@ -33,17 +48,35 @@ def run(defended: bool, backend_name: str | None, clean: bool = False) -> dict:
         guarded |= set(s)
 
     backend = make_backend(backend_name)
-    # Use genuinely different models per guard where the provider offers them, so
-    # the ensemble is heterogeneous (a blind spot in one is not shared by all).
     guard_models: tuple[str, ...] = ()
     if getattr(backend, "provider", None) == "groq":
-        guard_models = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
+        guard_models = GROQ_GUARD_MODELS
     guards = GuardEnsemble(k=3, backend=backend, models=guard_models)
     order = list(nx.topological_sort(m.graph))
 
-    print(f"=== {'DEFENDED' if defended else 'UNDEFENDED'} run "
-          f"(backend={getattr(backend, 'name', '?')}, payload={'clean' if clean else 'poisoned'}) ===")
-    print(f"checkpoints (guarded nodes): {sorted(guarded)}\n")
+    yield {
+        "type": "run_start",
+        "mode": "defended" if defended else "undefended",
+        "backend": getattr(backend, "name", "?"),
+        "payload": "clean" if clean else "poisoned",
+        "payload_text": get_target_output(clean=clean),  # the actual target content read at entry
+        "order": order,
+        "guarded": sorted(guarded),
+        "topology": {
+            "nodes": [
+                {
+                    "id": v,
+                    "label": m.graph.nodes[v].get("label", v),
+                    "caps": m.graph.nodes[v].get("caps", []),
+                    "weight": m.weight(v),
+                }
+                for v in m.nodes
+            ],
+            "edges": [{"from": u, "to": w} for u, w in m.graph.edges],
+            "entry": list(m.entry),
+            "critical": list(m.critical),
+        },
+    }
 
     outputs: dict[str, str] = {}
     blocked_at: list[str] = []
@@ -54,32 +87,77 @@ def run(defended: bool, backend_name: str | None, clean: bool = False) -> dict:
         else:
             upstream = "\n".join(outputs[p] for p in preds)
 
-        out = Agent(node, backend).run(upstream)
+        label = m.graph.nodes[node].get("label", node)
+        yield {"type": "agent_start", "node": node, "label": label, "input": upstream}
 
-        note = ""
-        if defended and node in guarded:
+        # A backend error (e.g. Groq 429 after retries) must not abort the run.
+        try:
+            out = Agent(node, backend).run(upstream)
+            error = False
+        except Exception as e:  # noqa: BLE001 - surface to the UI, keep going
+            out = f"[{node}] backend error: {type(e).__name__}: {e}"
+            error = True
+
+        wiped = False
+        if defended and node in guarded and not error:
             block, votes = guards.blocks(out)
+            yield {
+                "type": "guard_vote",
+                "node": node,
+                "votes": votes,
+                "models": list(guard_models) if guard_models else ["stub"] * guards.k,
+                "blocked": block,
+            }
             if block:
                 out = (f"[{node}] hand-off BLOCKED at checkpoint; ContextWipe applied. "
                        f"Sanitized summary forwarded (no untrusted directives).")
                 blocked_at.append(node)
-                note = f"  <-- GUARDS BLOCK (votes={votes}) + ContextWipe"
-        outputs[node] = out
-        flag = "  [CANARY]" if is_compromised(out) else "  [clean]"
-        shown = " ".join(out.split())
-        if len(shown) > 200:
-            shown = shown[:200] + " ..."
-        print(f"  {node:>12}:{flag} {shown}{note}")
+                wiped = True
 
-    orch_out = outputs.get("orchestrator", "")
-    rep_out = outputs.get("reporter", "")
-    orch_pwned = is_compromised(orch_out)
-    rep_pwned = is_compromised(rep_out)
-    print(f"\n  orchestrator compromised: {orch_pwned} | reporter compromised: {rep_pwned}")
-    if blocked_at:
-        print(f"  blocked at: {blocked_at}")
-    print()
-    return {"orch_pwned": orch_pwned, "rep_pwned": rep_pwned, "blocked_at": blocked_at}
+        outputs[node] = out
+        yield {
+            "type": "agent_output",
+            "node": node,
+            "label": label,
+            "output": out,
+            "compromised": is_compromised(out),
+            "wiped": wiped,
+            "error": error,
+        }
+
+    yield {
+        "type": "run_end",
+        "orch_pwned": is_compromised(outputs.get("orchestrator", "")),
+        "rep_pwned": is_compromised(outputs.get("reporter", "")),
+        "blocked_at": blocked_at,
+    }
+
+
+def run(defended: bool, backend_name: str | None, clean: bool = False) -> dict:
+    """CLI consumer of :func:`iter_run` — prints the stream to the terminal."""
+    summary = {"orch_pwned": False, "rep_pwned": False, "blocked_at": []}
+    for ev in iter_run(defended, backend_name, clean):
+        if ev["type"] == "run_start":
+            print(f"=== {ev['mode'].upper()} run (backend={ev['backend']}, "
+                  f"payload={ev['payload']}) ===")
+            print(f"checkpoints (guarded nodes): {ev['guarded']}\n")
+        elif ev["type"] == "guard_vote" and ev["blocked"]:
+            pass  # the block is shown on the agent_output line below
+        elif ev["type"] == "agent_output":
+            flag = "  [CANARY]" if ev["compromised"] else "  [clean]"
+            shown = " ".join(ev["output"].split())
+            if len(shown) > 200:
+                shown = shown[:200] + " ..."
+            note = "  <-- BLOCKED + ContextWipe" if ev["wiped"] else ""
+            print(f"  {ev['node']:>12}:{flag} {shown}{note}")
+        elif ev["type"] == "run_end":
+            summary = ev
+            print(f"\n  orchestrator compromised: {ev['orch_pwned']} | "
+                  f"reporter compromised: {ev['rep_pwned']}")
+            if ev["blocked_at"]:
+                print(f"  blocked at: {ev['blocked_at']}")
+            print()
+    return summary
 
 
 def main() -> None:

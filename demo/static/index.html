@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trust-Aware Topological Linearization — Live Demo</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="app-header">
+  <h1>Trust-Aware Topological Linearization — Live Demo</h1>
+  <p class="subtitle">A 7-agent autonomous pentest team under prompt-injection attack: watch the poisoned hand-off cascade when undefended, and get contained at the guard checkpoints when defended.</p>
+</header>
+
+<section class="controls" aria-label="Run controls">
+  <div class="control-group">
+    <button id="btn-undefended" class="btn btn-danger" type="button">Run Undefended</button>
+    <button id="btn-defended" class="btn btn-safe" type="button">Run Defended</button>
+    <button id="btn-both" class="btn btn-primary" type="button">Run Both</button>
+    <button id="btn-clear" class="btn btn-ghost" type="button">Clear</button>
+  </div>
+  <div class="control-group">
+    <label class="field" for="backend">Backend
+      <select id="backend">
+        <option value="stub" selected>stub (offline, instant)</option>
+        <option value="groq">groq (real LLMs)</option>
+      </select>
+    </label>
+    <div class="seg" role="radiogroup" aria-label="Layout">
+      <button id="lay-single" class="seg-btn active" type="button" role="radio" aria-checked="true">Single panel</button>
+      <button id="lay-side" class="seg-btn" type="button" role="radio" aria-checked="false">Side-by-side</button>
+    </div>
+  </div>
+</section>
+
+<div class="legend" aria-label="Colour legend">
+  <span class="lg"><i class="sw sw-pending"></i>pending</span>
+  <span class="lg"><i class="sw sw-active"></i>running</span>
+  <span class="lg"><i class="sw sw-clean"></i>clean</span>
+  <span class="lg"><i class="sw sw-compromised"></i>compromised</span>
+  <span class="lg"><i class="sw sw-blocked"></i>blocked + ContextWipe</span>
+  <span class="lg"><i class="sw sw-error"></i>error</span>
+  <span class="lg"><b class="star">&#9733;</b>critical node</span>
+  <span class="lg"><b class="tag-entry">&#8656;target</b>entry (reads attacker-controlled input)</span>
+</div>
+
+<main id="main" class="main single"></main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
