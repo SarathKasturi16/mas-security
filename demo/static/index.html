@@ -3,49 +3,123 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trust-Aware Topological Linearization — Live Demo</title>
+<title>Stopping a Prompt-Injection Worm in AI Agent Teams</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header class="app-header">
-  <h1>Trust-Aware Topological Linearization — Live Demo</h1>
-  <p class="subtitle">A 7-agent autonomous pentest team under prompt-injection attack: watch the poisoned hand-off cascade when undefended, and get contained at the guard checkpoints when defended.</p>
-</header>
+<div class="app" id="app">
 
-<section class="controls" aria-label="Run controls">
-  <div class="control-group">
-    <button id="btn-undefended" class="btn btn-danger" type="button">Run Undefended</button>
-    <button id="btn-defended" class="btn btn-safe" type="button">Run Defended</button>
-    <button id="btn-both" class="btn btn-primary" type="button">Run Both</button>
-    <button id="btn-clear" class="btn btn-ghost" type="button">Clear</button>
-  </div>
-  <div class="control-group">
-    <label class="field" for="backend">Backend
-      <select id="backend">
-        <option value="stub" selected>stub (offline, instant)</option>
-        <option value="groq">groq (real LLMs)</option>
-      </select>
-    </label>
-    <div class="seg" role="radiogroup" aria-label="Layout">
-      <button id="lay-single" class="seg-btn active" type="button" role="radio" aria-checked="true">Single panel</button>
-      <button id="lay-side" class="seg-btn" type="button" role="radio" aria-checked="false">Side-by-side</button>
+  <header class="hdr">
+    <h1>Stopping Prompt-Injection Worms</h1>
+    <div class="cfg" role="group" aria-label="Scenario">
+      <label class="fld">Team
+        <select id="sel-manifest" aria-label="Agent team (manifest)"></select>
+      </label>
+      <label class="fld">Budget B
+        <input id="rng-budget" type="range" min="3" max="30" step="1" value="10" aria-label="Guard budget">
+        <output id="out-budget" for="rng-budget">10</output>
+      </label>
+      <div class="seg" role="radiogroup" aria-label="Allocation">
+        <button type="button" class="seg-btn" id="alloc-uniform" role="radio" aria-checked="false">Equal split</button>
+        <button type="button" class="seg-btn on" id="alloc-risk" role="radio" aria-checked="true">Risk split</button>
+      </div>
     </div>
-  </div>
-</section>
+    <div class="hdr-right">
+      <span id="live-badge" class="live-badge" hidden></span>
+      <span id="step-counter" class="step-counter">Step 0 / 13</span>
+    </div>
+  </header>
 
-<div class="legend" aria-label="Colour legend">
-  <span class="lg"><i class="sw sw-pending"></i>pending</span>
-  <span class="lg"><i class="sw sw-active"></i>running</span>
-  <span class="lg"><i class="sw sw-clean"></i>clean</span>
-  <span class="lg"><i class="sw sw-compromised"></i>compromised</span>
-  <span class="lg"><i class="sw sw-blocked"></i>blocked + ContextWipe</span>
-  <span class="lg"><i class="sw sw-error"></i>error</span>
-  <span class="lg"><b class="star">&#9733;</b>critical node</span>
-  <span class="lg"><b class="tag-entry">&#8656;target</b>entry (reads attacker-controlled input)</span>
+  <main class="stage" id="stage">
+    <svg id="svg" viewBox="0 0 1600 640" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Animated explainer stage"></svg>
+    <div id="verdict" class="verdict" hidden></div>
+    <div id="stage-msg" class="stage-msg" hidden></div>
+  </main>
+
+  <section class="caption" id="caption-bar">
+    <p id="caption" role="status" aria-live="polite"></p>
+  </section>
+
+  <nav class="ctl" aria-label="Step controller">
+    <div class="ctl-l">
+      <button type="button" class="btn" id="btn-prev"><span class="ic" aria-hidden="true">&#9664;</span> Prev</button>
+      <button type="button" class="btn primary" id="btn-play"><span class="ic" aria-hidden="true">&#9654;</span> <span id="play-label">Play</span></button>
+      <button type="button" class="btn" id="btn-next"><span id="next-label">Next</span> <span class="ic" aria-hidden="true">&#9654;</span></button>
+    </div>
+    <ol class="dots" id="dots" aria-label="Steps"></ol>
+    <div class="ctl-r" id="run-group" role="group" aria-label="Live runs">
+      <button type="button" class="btn danger" id="btn-run-u">Run undefended</button>
+      <button type="button" class="btn safe" id="btn-run-d">Run defended</button>
+      <button type="button" class="btn" id="btn-run-b">Run both</button>
+    </div>
+  </nav>
+
+  <section class="strip" aria-label="Settings">
+    <label class="fld">Speed
+      <input id="rng-speed" type="range" min="0.5" max="2" step="0.25" value="1" aria-label="Animation speed">
+      <output id="out-speed" for="rng-speed">1.0x</output>
+    </label>
+    <label class="tgl"><input type="checkbox" role="switch" id="tg-rm"><span class="sw" aria-hidden="true"></span>Reduce motion</label>
+    <label class="tgl"><input type="checkbox" role="switch" id="tg-labels" checked><span class="sw" aria-hidden="true"></span>Show labels</label>
+    <label class="fld">Backend
+      <select id="sel-backend" aria-label="LLM backend"><option value="stub" selected>stub</option><option value="groq">groq</option></select>
+    </label>
+    <label class="fld">Guards
+      <select id="sel-guard" aria-label="Guard model"><option value="heuristic" selected>Heuristic</option><option value="sim">Simulation (30%)</option></select>
+    </label>
+    <label class="fld">Seed
+      <input id="num-seed" type="number" min="0" max="1000000" value="0" aria-label="Random seed">
+    </label>
+    <label class="tgl"><input type="checkbox" role="switch" id="tg-clean"><span class="sw" aria-hidden="true"></span>Clean payload</label>
+    <span class="sp"></span>
+    <button type="button" class="btn sm" id="btn-reset">Reset step</button>
+    <button type="button" class="btn sm" id="btn-restart">Restart</button>
+  </section>
+
+  <footer class="tabbar">
+    <button type="button" class="logtab" id="btn-log" aria-expanded="false" aria-controls="drawer">
+      <span class="ic" aria-hidden="true" id="log-ic">&#9650;</span> Logs <span class="cnt" id="log-count">0</span>
+    </button>
+    <span class="keys">&#8592; &#8594; step &middot; Space next &middot; P play &middot; L logs &middot; R reduce motion</span>
+  </footer>
+
+  <aside class="drawer" id="drawer" aria-label="Run logs" hidden>
+    <div class="dr-top">
+      <div class="tabs" role="tablist" aria-label="Log view">
+        <button type="button" role="tab" class="tab" data-view="undefended" aria-selected="false">Undefended</button>
+        <button type="button" role="tab" class="tab" data-view="defended" aria-selected="false">Defended</button>
+        <button type="button" role="tab" class="tab on" data-view="both" aria-selected="true">Merged</button>
+        <button type="button" role="tab" class="tab" data-view="side" aria-selected="false">Side by side</button>
+      </div>
+      <div class="lv" id="lv-chips" role="group" aria-label="Level filters"></div>
+      <select id="log-src" aria-label="Source filter"><option value="">All sources</option></select>
+      <input id="log-search" type="search" placeholder="Search messages" aria-label="Search log messages">
+      <span class="lcount" id="log-shown">0 / 0</span>
+      <label class="mini"><input type="checkbox" id="log-announce"> Announce</label>
+      <button type="button" class="btn sm" id="log-dl">Download JSON</button>
+      <button type="button" class="btn sm" id="log-clear">Clear</button>
+      <button type="button" class="btn sm" id="log-close" aria-label="Close logs">&#10005;</button>
+    </div>
+    <div class="dr-body" id="log-body"></div>
+    <button type="button" class="jump" id="log-jump" hidden>Jump to latest &#8595;</button>
+  </aside>
 </div>
 
-<main id="main" class="main single"></main>
-
-<script src="/static/app.js"></script>
+<script src="/static/vendor/d3.min.js"></script>
+<script src="/static/vendor/gsap.min.js"></script>
+<script src="/static/vendor/MotionPathPlugin.min.js"></script>
+<script src="/static/vendor/DrawSVGPlugin.min.js"></script>
+<script src="/static/vendor/Flip.min.js"></script>
+<script src="/static/js/util.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/state.js"></script>
+<script src="/static/js/stage-graph.js"></script>
+<script src="/static/js/stage-linear.js"></script>
+<script src="/static/js/stage-budget.js"></script>
+<script src="/static/js/logs.js"></script>
+<script src="/static/js/live.js"></script>
+<script src="/static/js/steps.js"></script>
+<script src="/static/js/main.js"></script>
+<script src="/static/replay/replay.js"></script>
 </body>
 </html>

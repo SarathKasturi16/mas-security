@@ -36,3 +36,19 @@ def blast_radius(manifest, checkpoint_nodes: set, include_self: bool = False) ->
     if include_self:
         reach |= cp
     return float(sum(manifest.weight(v) for v in reach))
+
+
+def downstream_set(manifest, checkpoint_nodes: set, include_self: bool = False) -> set:
+    """The node set that :func:`blast_radius` sums weights over.
+
+    Same residual-reachable-set logic as ``blast_radius`` (descendants of the
+    checkpoint nodes minus the checkpoint nodes; plus them if ``include_self``).
+    """
+    cp = set(checkpoint_nodes)
+    reach: set = set()
+    for v in cp:
+        reach |= nx.descendants(manifest.graph, v)
+    reach -= cp
+    if include_self:
+        reach |= cp
+    return reach

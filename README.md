@@ -29,6 +29,20 @@ uv run pytest -q
   Backend via `MAS_BACKEND` / `--backend`: `stub` (offline, default) or a real
   free-tier LLM (`groq|openrouter|gemini`) — copy `demo/.env.example` to `demo/.env`.
 
+## Browser GUI
+```bash
+uv run python -m demo.server [--port 8770] [--no-browser]   # http://127.0.0.1:8770
+```
+Binds to 127.0.0.1 only. The page streams the live demo and animates the full
+pipeline (decomposition, checkpoints, budget allocation, guards, simulation), all
+driven by the same `engine/pipeline.py:build_plan` the Monte-Carlo uses.
+- `GET /api/manifests` lists available manifests.
+- `GET /api/plan?manifest=pentest7_poc&budget=10&alloc=risk|uniform` returns the plan as JSON
+  (budget 3..30 and at least the number of checkpoints; one budget unit = one guard).
+- `GET /api/run?mode=defended|undefended&backend=stub&alloc=risk&budget=10&guard_model=heuristic|sim&seed=0`
+  streams the run as Server-Sent Events. `guard_model=sim` makes each guard catch a
+  malicious hand-off with probability p0 (mirrors the simulation); invalid params give 400.
+
 ## Status (Phase 1)
 Components 1 & 2 core complete and tested; live demo works on the stub backend.
 Full statistical experiments (CIs) and the MAPTA/xOffense manifests are next.

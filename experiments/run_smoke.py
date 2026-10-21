@@ -22,9 +22,7 @@ for extra in ("mapta", "xoffense"):
     if (MANIFEST_DIR / f"{extra}.json").exists():
         MANIFESTS.append(extra)
 
-P_SPREAD = 0.7
-N_TRIALS = 4000
-SEED = 7
+from engine.pipeline import N_TRIALS, P_SPREAD, SEED  # noqa: E402 - one source for the GUI too
 
 
 def checkpoints_and_rhos(m):

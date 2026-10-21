@@ -13,45 +13,62 @@ CLI and the browser GUI (demo/server.py) consume it, so they never drift.
 from __future__ import annotations
 
 import argparse
+import random
 from collections.abc import Iterator
+from pathlib import Path
 
 import networkx as nx
 
 from demo.agents import Agent, make_backend
 from demo.guards_live import GuardEnsemble
 from demo.target_mock import get_target_output, is_compromised
-from engine.linearize import decompose
 from engine.manifest import load_manifest
-from engine.metrics import entry_checkpoint
+from engine.pipeline import build_plan
 
-MANIFEST = "manifests/pentest7_poc.json"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = REPO_ROOT / "manifests" / "pentest7_poc.json"  # cwd-independent
 
 # Distinct models per guard when the provider offers them (heterogeneous vote).
 GROQ_GUARD_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
 
 
 def iter_run(
-    defended: bool, backend_name: str | None = None, clean: bool = False
+    defended: bool,
+    backend_name: str | None = None,
+    clean: bool = False,
+    *,
+    manifest_path: str | Path | None = None,
+    alloc: str = "risk",
+    budget: int | None = None,
+    guard_model: str = "heuristic",
+    seed: int = 0,
 ) -> Iterator[dict]:
     """Run the pipeline, yielding JSON-safe events as each step happens.
 
     Events: ``run_start``, ``agent_start``, ``guard_vote`` (defended guarded
     nodes only), ``agent_output``, ``run_end``. The GUI and the CLI both consume
     this so the pipeline logic exists in exactly one place.
+
+    The checkpoint plan comes from :func:`engine.pipeline.build_plan` (the same
+    decomposition/allocation the Monte-Carlo uses): a node is guarded iff it
+    sits in some checkpoint, and its ensemble has ``node_guards[node]`` guards
+    (one budget unit = one guard) under the ``"any"`` rule.
     """
-    m = load_manifest(MANIFEST)
-    d = decompose(m)
-    entry = entry_checkpoint(m)
-    # Guarded checkpoint nodes = entry (S0) union all separator nodes.
-    guarded = set(entry)
-    for s in d["separators"]:
-        guarded |= set(s)
+    mpath = Path(manifest_path) if manifest_path is not None else MANIFEST
+    m = load_manifest(mpath)
+    plan = build_plan(m, budget=budget, alloc=alloc, with_sim=False)
+    plan["manifest"] = mpath.stem
+    node_guards: dict[str, int] = plan["node_guards"]
+    guarded = {v for v, k in node_guards.items() if k > 0}
+    node_cps = {
+        v: [c["id"] for c in plan["checkpoints"] if v in c["nodes"]] for v in m.nodes
+    }
 
     backend = make_backend(backend_name)
     guard_models: tuple[str, ...] = ()
     if getattr(backend, "provider", None) == "groq":
         guard_models = GROQ_GUARD_MODELS
-    guards = GuardEnsemble(k=3, backend=backend, models=guard_models)
+    rng = random.Random(seed)
     order = list(nx.topological_sort(m.graph))
 
     yield {
@@ -62,6 +79,10 @@ def iter_run(
         "payload_text": get_target_output(clean=clean),  # the actual target content read at entry
         "order": order,
         "guarded": sorted(guarded),
+        "plan": plan,
+        "alloc": alloc,
+        "budget": plan["budget"],
+        "guard_model": guard_model,
         "topology": {
             "nodes": [
                 {
@@ -100,13 +121,27 @@ def iter_run(
 
         wiped = False
         if defended and node in guarded and not error:
+            k = node_guards[node]
+            guards = GuardEnsemble(
+                k=k, backend=backend, models=guard_models, rule="any",
+                guard_model=guard_model, p0=plan["p0"], rng=rng,
+            )
             block, votes = guards.blocks(out)
+            if guard_model == "sim":
+                used = ["sim"] * k
+            elif guard_models:
+                used = [guard_models[i % len(guard_models)] for i in range(k)]
+            else:
+                used = ["stub"] * k
             yield {
                 "type": "guard_vote",
                 "node": node,
                 "votes": votes,
-                "models": list(guard_models) if guard_models else ["stub"] * guards.k,
+                "models": used,
                 "blocked": block,
+                "checkpoint": node_cps[node],
+                "k": k,
+                "rule": "any",
             }
             if block:
                 out = (f"[{node}] hand-off BLOCKED at checkpoint; ContextWipe applied. "
@@ -123,6 +158,7 @@ def iter_run(
             "compromised": is_compromised(out),
             "wiped": wiped,
             "error": error,
+            "upstream": preds,
         }
 
     yield {
