@@ -1,11 +1,12 @@
 """Live exploit-then-defend demo on the 7-agent pentest MAS.
 
     python -m demo.run_demo --undefended     # injection cascades to orchestrator
-    python -m demo.run_demo --defended        # guard ensemble blocks it at a checkpoint
+    python -m demo.run_demo --defended        # ingress guards block it before it enters a node
 
 Backend via --backend or MAS_BACKEND (stub|groq|openrouter|gemini). The stub
 backend runs offline and deterministically. Same payload and topology in both
-modes; the only difference is whether checkpoints audit the hand-offs.
+modes; the only difference is whether checkpoints audit the hand-offs
+into each guarded node (a blocked input is wiped before the agent sees it).
 
 The pipeline lives in ``iter_run`` as a stream of structured events; both this
 CLI and the browser GUI (demo/server.py) consume it, so they never drift.
@@ -48,13 +49,15 @@ def iter_run(
     """Run the pipeline, yielding JSON-safe events as each step happens.
 
     Events: ``run_start``, ``agent_start``, ``guard_vote`` (defended guarded
-    nodes only), ``agent_output``, ``run_end``. The GUI and the CLI both consume
+    nodes only; ``direction="incoming"``), ``agent_output``, ``run_end``. The GUI and the CLI both consume
     this so the pipeline logic exists in exactly one place.
 
     The checkpoint plan comes from :func:`engine.pipeline.build_plan` (the same
     decomposition/allocation the Monte-Carlo uses): a node is guarded iff it
     sits in some checkpoint, and its ensemble has ``node_guards[node]`` guards
-    (one budget unit = one guard) under the ``"any"`` rule.
+    (one budget unit = one guard) under the ``"any"`` rule. Guards are *ingress*
+    guards: the ensemble audits the node's input before the agent runs, and a
+    blocked input is replaced by a sanitized ContextWipe summary.
     """
     mpath = Path(manifest_path) if manifest_path is not None else MANIFEST
     m = load_manifest(mpath)
@@ -116,25 +119,25 @@ def iter_run(
         label = m.graph.nodes[node].get("label", node)
         yield {"type": "agent_start", "node": node, "label": label, "input": upstream}
 
-        # A backend error (e.g. Groq 429 after retries) must not abort the run.
-        try:
-            out = Agent(node, backend).run(upstream)
-            error = False
-        except Exception as e:  # noqa: BLE001 - surface to the UI, keep going
-            out = f"[{node}] backend error: {type(e).__name__}: {e}"
-            error = True
-
+        # Ingress guard: a guarded node's INPUT is audited before the agent runs, in the
+        # spirit of engine/simulate.py (which blocks infection *into* a guarded node).
+        # Approximation: the demo checks the joined hand-off once per node, whereas the
+        # simulation draws one block chance per infected incoming edge.
         wiped = False
-        if defended and node in guarded and not error:
+        agent_input = upstream
+        if defended and node in guarded:
             k = node_guards[node]
             guards = GuardEnsemble(
                 k=k, backend=backend, models=guard_models, rule="any",
                 guard_model=guard_model, p0=plan["p0"], rng=rng,
             )
+            guard_error = False
             try:
-                block, votes = guards.blocks(out)
+                block, votes = guards.blocks(upstream)
             except Exception:  # noqa: BLE001 - a broken guard must not wave traffic through
-                block, votes = True, [True] * k
+                # Fail closed (input is still wiped) but report it as an error, not as
+                # a detection: it must never count towards "attack stopped".
+                block, votes, guard_error = True, [True] * k, True
             if guard_model == "sim":
                 used = ["sim"] * k
             elif guard_models:
@@ -144,18 +147,32 @@ def iter_run(
             yield {
                 "type": "guard_vote",
                 "node": node,
+                "direction": "incoming",
                 "votes": votes,
                 "models": used,
                 "blocked": block,
                 "checkpoint": node_cps[node],
                 "k": k,
                 "rule": "any",
+                "guard_error": guard_error,
             }
             if block:
-                out = (f"[{node}] hand-off BLOCKED at checkpoint; ContextWipe applied. "
-                       f"Sanitized summary forwarded (no untrusted directives).")
-                blocked_at.append(node)
+                agent_input = (
+                    f"[ContextWipe] Untrusted hand-off to {node} was blocked at checkpoint "
+                    f"{', '.join(node_cps[node])}; only a sanitized summary is forwarded: "
+                    f"upstream reported routine findings."
+                )
+                if not guard_error:
+                    blocked_at.append(node)
                 wiped = True
+
+        # A backend error (e.g. Groq 429 after retries) must not abort the run.
+        try:
+            out = Agent(node, backend).run(agent_input)
+            error = False
+        except Exception as e:  # noqa: BLE001 - surface to the UI, keep going
+            out = f"[{node}] backend error: {type(e).__name__}: {e}"
+            error = True
 
         outputs[node] = out
         yield {
@@ -165,6 +182,7 @@ def iter_run(
             "output": out,
             "compromised": is_compromised(out),
             "wiped": wiped,
+            "agent_input": agent_input,
             "error": error,
             "upstream": preds,
         }

@@ -1,4 +1,4 @@
-/* Step controller: 14 frames (0-13). Each step has
+/* Step controller: 15 frames (0-14). Each step has
  *   VIEW[n]   - the complete end state (applied instantly and idempotently by snap()), and
  *   PLAY[n]   - a GSAP timeline that animates the transition from VIEW[n-1] to VIEW[n].
  * Moving forward one step plays the timeline then re-applies VIEW[n]; jumping or going back snaps. */
@@ -10,30 +10,36 @@
   const DEF = {
     title: 0, watermark: 0, net: 0, edges: 0, website: 0, entry: 0, legend: 0, tray: 0, star: 0, holds: 0,
     scaled: 0, scores: 0, nodeState: "idle", hot: 0, nodeShields: 0,
-    lin: 0, pills: 0, pillsDim: 0, gates: 0, rho: null, hit: null,
-    pot: 0, ghost: 0, coins: 0, bars: 0, gShields: 0, results: 0,
+    blobs: 0, bagTags: 0, cards: 0, bridges: 0, gates: 0, s0: 0,        // bags -> cards -> checkpoints
+    blast: null, squeeze: 0, covered: 0,                                 // blast radius / coverage on the network
+    budgetRow: 0, pot: 0, ghost: 0, coins: 0, bars: 0, gShields: 0, results: 0,
   };
+  const NET = { net: 1, edges: 1, star: 1, scaled: 1, scores: 1 };      // the sized network with scores
+  const GEO = { scaled: 1, star: 1, scores: 1 };                         // keeps node geometry identical in hidden-network steps
   const VIEW = [
     { title: 1, watermark: 1 },
     { net: 1, edges: 1, legend: 1 },
     { net: 1, edges: 1, website: 1, entry: 1, legend: 1 },
     { net: 1, edges: 1, website: 1, entry: 1, star: 1, holds: 1, nodeState: "infected", hot: 1 },
     { net: 1, edges: 1, tray: 1, star: 1, scaled: 1, scores: 1 },
-    { lin: 1, pills: 1 },
-    { lin: 1, pills: 1, gates: 1 },
-    { lin: 1, pills: 1, gates: 1, rho: "S0", hit: "S0" },
-    { lin: 1, pills: 1, pillsDim: 1, gates: 1, pot: 1, ghost: 1, coins: "placed", bars: 1 },
-    { lin: 1, pills: 1, pillsDim: 1, gates: 1, gShields: 1 },
-    { net: 1, edges: 1, star: 1, scaled: 1, scores: 1, nodeShields: 1 },
-    { net: 1, edges: 1, website: 1, star: 1, scaled: 1, scores: 1 },
-    { net: 1, edges: 1, website: 1, star: 1, scaled: 1, scores: 1, nodeShields: 1 },
+    { ...NET, blobs: 1, bagTags: 1 },
+    { ...GEO, cards: 1, bridges: 1 },
+    { ...GEO, cards: 1, bridges: 1, gates: 1, s0: 1 },
+    { ...NET, website: 1, blast: "end", squeeze: 1 },
+    { ...GEO, budgetRow: 1, pot: 1, ghost: 1, coins: "placed", bars: 1 },
+    { ...GEO, budgetRow: 1, gShields: 1 },
+    { ...NET, nodeShields: 1, covered: 1 },
+    { ...NET, website: 1 },
+    { ...NET, website: 1, nodeShields: 1 },
     { results: 1 },
   ];
   const view = (n) => Object.assign({}, DEF, VIEW[n]);
 
-  const TITLES = ["Title", "The team", "The threat", "Why it is dangerous", "Risk scores", "Linearize", "Checkpoints",
-    "Blast radius", "Budget", "Guards", "Back to the network", "Live run: no defence", "Live run: defended", "The numbers"];
-  const ACCENT = ["#44505F", "#16202D", "#B45309", "#B42318", "#8A6100", "#1D4ED8", "#334155", "#B42318", "#8A6100", "#1D4ED8", "#1D4ED8", "#B42318", "#17744F", "#17744F"];
+  const TITLES = ["Title", "The team", "The threat", "Why it is dangerous", "Risk scores", "Bags", "Bags as cards", "Checkpoints",
+    "Blast radius", "Budget", "Guards", "Guards on the team", "Live run: no defence", "Live run: defended", "The numbers"];
+  const ACCENT = ["#44505F", "#16202D", "#B45309", "#B42318", "#8A6100", "#1D4ED8", "#1D4ED8", "#334155", "#B42318", "#8A6100", "#1D4ED8", "#1D4ED8", "#B42318", "#17744F", "#17744F"];
+
+  const andList = (a) => (a.length < 2 ? a.join("") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1]);
 
   // ---------------------------------------------------------------- captions: arrays of strings, {b: bold}
   function captions(plan) {
@@ -43,20 +49,25 @@
     const sim = plan.sim || {};
     const p = (k) => (sim[k] ? (sim[k].I_w * 100).toFixed(1) + "%" : "n/a");
     const uni = plan.alloc === "uniform";
+    const bare = (A.scene && A.scene.cover ? A.scene.cover : []).map((it) => it.id);
+    const bareTxt = bare.length ? andList(bare) : "";
     return [
       ["Can one poisoned web page take over a whole team of AI helpers?"],
       [`${n} AI agents work as a team on a security test. Each one passes its findings to the next.`],
       [`The target website is hostile. It hides a secret instruction (a `, { b: "prompt injection" }, `) in the page the first ${ent} agents read.`],
       ["The hidden instruction spreads from agent to agent until the one holding the credentials (passwords) is taken over."],
       ["Each agent gets a ", { b: "risk score" }, " from what it is allowed to do. Bigger means more damage if it is taken over."],
-      ["We lay the team out in a line: each agent is a bar over the ", { b: "bags" }, " (groups of agents) where it is active. Bag order comes from an elimination order, not the data flow."],
-      ["A ", { b: "checkpoint" }, " (gate) sits where agents hand work to each other. S0 guards the door from the outside world."],
-      ["If an attack slips past a gate, everything downstream is exposed (", { b: "blast radius" }, ", ρ). " + cps.map((c) => `${c.id}: ρ\u00A0=\u00A0${fmt(c.rho)}`).join(", ") + "."],
+      ["A ", { b: "bag" }, " is a small group of agents that work closely together. Agents that appear in two neighbouring bags are the ", { b: "bridges" }, " between them."],
+      ["Unfold the bags into cards. The ", { b: "bridge agents" }, " shared with the next card are highlighted and joined by a short line."],
+      ["A ", { b: "checkpoint" }, " sits on the bridge agents: every message crossing from one bag to the next passes through them. S0 is the door from the outside world."],
+      ["If an attack slips past a checkpoint, these agents are exposed (", { b: "blast radius" }, ", ρ). ρ adds up their risk scores. The checkpoint's own agents aren't counted; S0 counts the entry agents because the attack starts there."],
       [`We only have `, { b: `${B} guards` }, ` to spend. ` + (uni ? "Splitting evenly ignores where the damage would be biggest." : "Putting more where the damage would be biggest beats splitting evenly (the even split is rounded to whole guards).")],
       ["Each spent coin is one more independent checker (", { b: "guard" }, `). With ${strongest.guards} guards, about ${Math.round(strongest.p_block * 100)}% of attacks are caught.`],
-      ["Back on the real team: shields mark the agents with guards. These are the ones that check incoming messages."],
+      bare.length
+        ? [bareTxt.charAt(0).toUpperCase() + bareTxt.slice(1) + (bare.length > 1 ? " have no guard of their own: every message they receive" : " has no guard of its own: every message it receives") + " must first pass a guarded checkpoint agent."]
+        : ["Back on the real team: shields mark the agents that carry the guards."],
       ["A real run with ", { b: "no protection" }, ". Watch the hidden instruction travel from the website to the key agent."],
-      ["Now the guards vote on each message. If ", { b: "any" }, " guard says BLOCK, the message is thrown away and the agent's memory is wiped."],
+      ["Now the guards check each hand-off ", { b: "before" }, " the agent receives it. If ", { b: "any" }, " guard says BLOCK, the message is destroyed and the agent gets a clean summary instead."],
       sim.none ? [`Share of the team's risk that gets compromised: ${p("none")} with no defence, ${p("uniform")} with equal guards, ${p("risk")} with our risk-based split.`] : ["No simulation data for this team."],
     ];
   }
@@ -64,7 +75,7 @@
   // ---------------------------------------------------------------- state
   const ST = { cur: -1, tl: null, dwell: null, pending: null };
   const sc = () => A.scene;
-  const isLive = (n) => n === 11 || n === 12;
+  const isLive = (n) => n === 12 || n === 13;
 
   /** Kill the running step timeline and settle the promise that goTo()/play() handed out for it,
    *  so nothing awaiting a step (the autoplay tick) is left hanging. The autoplay dwell timer is NOT
@@ -82,9 +93,9 @@
   }
   function applyView(n) {
     const v = view(n), s = sc();
-    A.G.apply(v); A.L.apply(v); A.B.apply(v); A.R.apply(v);
-    gsap.set(s.L.live, { opacity: 1 });
-    A.G.compact(isLive(n) && A.logs.isOpen(), 0);
+    A.G.apply(v); A.K.apply(v); A.X.apply(v); A.B.apply(v); A.R.apply(v);
+    gsap.set(s.L.live, { autoAlpha: 1 });
+    if (v.squeeze) A.G.squeeze(s.blast.bottomU, 0); else A.G.compact(isLive(n) && A.logs.isOpen(), 0);
   }
 
   // ---------------------------------------------------------------- chrome (caption, dots, counters)
@@ -293,54 +304,46 @@
 
     5(tl, s) {
       fadeOut(tl, [s.L.tray], 0);
-      s.edges.forEach((e) => fadeOut(tl, e.el, 0, 0.35));
-      const lin = s.lin;
-      tl.fromTo(lin.colsG, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.01 }, 0.4);
-      lin.cols.forEach((c, i) => tl.fromTo(c, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.4 }, 0.5 + i * 0.07));
-      lin.order.forEach((id, i) => {
-        const p = lin.pills[id], nv = s.nodes[id], at = 0.25 + i * 0.07;
-        tl.set(p.g, { x: nv.x, y: nv.y, scale: 0.7, autoAlpha: 0 }, 0);
-        tl.to(nv.g, { x: p.cx, y: p.cy, scale: 0.55, duration: 0.9, ease: "power3.inOut" }, at);
-        tl.to(nv.g, { autoAlpha: 0, duration: 0.3 }, at + 0.55);
-        tl.to(p.g, { x: p.cx, y: p.cy, scale: 1, autoAlpha: 1, duration: 0.9, ease: "power3.inOut" }, at + 0.1);
-      });
+      A.K.playBlobs(tl, 0.4);
     },
 
-    6(tl, s) {
-      const order = s.plan.checkpoints.slice().sort((a, b) => (a.boundary < 0) - (b.boundary < 0) || a.boundary - b.boundary);
-      let t = 0.2;
-      for (const cp of order) {
-        const gt = s.lin.gates[cp.id];
-        for (const id of cp.nodes) { const p = s.lin.pills[id]; if (p) { tl.to(p.hl, { opacity: 1, duration: 0.25 }, t).to(p.hl, { opacity: 0, duration: 0.3 }, t + 1.0); } }
-        tl.set(gt.g, { autoAlpha: 1 }, t + 0.2);
-        tl.fromTo(gt.bar, { attr: { height: 0 } }, { attr: { height: s.lin.gatesH() }, duration: 0.5, ease: "power2.out" }, t + 0.2);
-        tl.fromTo(gt.tab, { scale: 0 }, { scale: 1, duration: 0.3, ease: "back.out(2)" }, t + 0.2);
-        t += 1.1;
-      }
-    },
+    6(tl) { A.K.playUnfold(tl, 0.1); },
 
-    7(tl, s) { blastSequence(tl, s, 0, s.plan.checkpoints.slice().sort((a, b) => (a.boundary < 0) - (b.boundary < 0) || a.boundary - b.boundary), true); },
+    7(tl) { A.K.playGates(tl, 0.2); },
 
     8(tl, s) {
-      const bud = s.bud, lin = s.lin;
-      // leave the blast view
-      A.L.emphasise(null, 0.3, tl, 0);
-      for (const id of lin.order) A.L.setPillState(lin.pills[id], false, 0.3, tl, 0);
-      tl.to(lin.rho.g, { autoAlpha: 0, duration: 0.3 }, 0);
-      tl.to(lin.colsG, { autoAlpha: 0.55, duration: 0.4 }, 0);
-      tl.to(lin.order.map((id) => lin.pills[id].g), { autoAlpha: 0.3, duration: 0.4 }, 0);
+      const bl = s.blast, nodeGs = s.ids.map((id) => s.nodes[id].g);
+      A.G.squeeze(bl.bottomU, 0);                     // make room under the graph for the equations
+      fadeOut(tl, s.L.cards, 0, 0.4);
+      tl.set(bl.g, { autoAlpha: 1 }, 0);
+      tl.fromTo(nodeGs, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.5 }, 0.2);
+      tl.fromTo(s.edges.map((e) => e.el), { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.5 }, 0.2);
+      let t = 0.9;
+      const order = bl.order;
+      order.forEach((cp, i) => {
+        t = A.X.phase(tl, t, cp, true);
+        if (i < order.length - 1) { A.X.clearNodes(tl, t, 0.35); t += 0.5; }
+      });
+      tl.set({}, {}, t);
+    },
+
+    9(tl, s) {
+      const bud = s.bud;
+      // leave the network + equations
+      tl.to([s.L.live, s.blast.g], { autoAlpha: 0, duration: 0.4 }, 0);
+      s.plan.checkpoints.forEach((cp, i) => tl.fromTo(bud.cols[cp.id], { autoAlpha: 0, y: 14 }, { autoAlpha: 1, y: 0, duration: 0.45, ease: "power2.out" }, 0.3 + i * 0.12));
       // pot and coins
       tl.set(bud.potCoins, { autoAlpha: 0 }, 0);
-      tl.set(bud.pot, { autoAlpha: 1 }, 0.1);
-      tl.from(bud.pot, { y: "+=16", autoAlpha: 0, duration: 0.5, ease: "power2.out" }, 0.1);
+      tl.set(bud.pot, { autoAlpha: 1 }, 0.5);
+      tl.from(bud.pot, { y: "+=16", autoAlpha: 0, duration: 0.5, ease: "power2.out" }, 0.5);
       bud.potCoins.forEach((c, i) => {
         const pos = bud.potPos[i];
         tl.set(c, { x: pos[0], y: pos[1], scale: 1 }, 0);
-        tl.fromTo(c, { autoAlpha: 0, scale: 0.4 }, { autoAlpha: 1, scale: 1, duration: 0.3, ease: "back.out(2)" }, 0.5 + i * 0.03);
+        tl.fromTo(c, { autoAlpha: 0, scale: 0.4 }, { autoAlpha: 1, scale: 1, duration: 0.3, ease: "back.out(2)" }, 0.9 + i * 0.03);
       });
       // ghost "equal split" row
       A.B.labelRows();
-      let t = 1.2;
+      let t = 1.8;
       tl.to(bud.labels, { autoAlpha: 1, duration: 0.3 }, t);
       tl.set([bud.lblSolid, bud.lblBar], { autoAlpha: 0 }, t);
       tl.to(bud.lblGhost, { autoAlpha: 1, duration: 0.3 }, t);
@@ -348,7 +351,7 @@
         bud.ghost[cp.id].forEach((c, i) => tl.fromTo(c, { opacity: 0, scale: 0.3, transformOrigin: "50% 50%" }, { opacity: 0.7, scale: 1, duration: 0.25 }, t + ci * 0.12 + i * 0.05));
       });
       t += 1.1;
-      // real allocation: coins fly pot -> gates
+      // real allocation: coins fly pot -> checkpoints
       tl.to(bud.lblSolid, { autoAlpha: 1, duration: 0.3 }, t);
       let used = 0; for (const cp of s.plan.checkpoints) used += cp[bud.sel];
       for (let i = 0; i < used; i++) {
@@ -367,7 +370,7 @@
       }
     },
 
-    9(tl, s) {
+    10(tl, s) {
       const bud = s.bud;
       tl.to(bud.lblGhost, { autoAlpha: 0, duration: 0.3 }, 0);
       tl.to(bud.lblBar, { autoAlpha: 0, duration: 0.3 }, 0);
@@ -376,12 +379,12 @@
         const b = bud.bars[cp.id];
         tl.to(b.g, { autoAlpha: 0, duration: 0.3 }, 0).to(b.qt, { opacity: 0, duration: 0.3 }, 0);
       }
-      // coins collapse into a shield at each gate
+      // coins collapse into a shield under each checkpoint
       let i = 0;
       for (const cp of s.plan.checkpoints) {
         const sh = bud.shields[cp.id], n = cp[bud.sel];
         for (let k = 0; k < n; k++, i++) {
-          tl.to(bud.potCoins[i], { x: s.lin.gates[cp.id].x, y: 556, scale: 0.3, autoAlpha: 0, duration: 0.6, ease: "power2.inOut" }, 0.4 + k * 0.04);
+          tl.to(bud.potCoins[i], { x: bud.cx[cp.id], y: 556, scale: 0.3, autoAlpha: 0, duration: 0.6, ease: "power2.inOut" }, 0.4 + k * 0.04);
         }
         tl.fromTo(sh.g, { scale: 0, autoAlpha: 1 }, { scale: 1.25, autoAlpha: 1, duration: 0.45, ease: "back.out(2)" }, 1.0);
         tl.fromTo(sh.catches, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 1.5);
@@ -391,44 +394,37 @@
       tl.to(bud.lblSolid, { autoAlpha: 0, duration: 0.3 }, 0.8);
     },
 
-    10(tl, s) {
-      const lin = s.lin, bud = s.bud;
+    11(tl, s) {
+      const bud = s.bud;
       for (const cp of s.plan.checkpoints) {
         const sh = bud.shields[cp.id];
-        tl.to([sh.g, sh.catches], { autoAlpha: 0, duration: 0.3 }, 0);
-        tl.to(lin.gates[cp.id].g, { autoAlpha: 0, duration: 0.3 }, 0);
+        tl.to([sh.g, sh.catches, bud.cols[cp.id]], { autoAlpha: 0, duration: 0.3 }, 0);
       }
-      s.edges.forEach((e) => tl.set(e.el, { autoAlpha: 0 }, 0));
-      for (const id of s.ids) {
-        const nv = s.nodes[id], p = lin.pills[id];
-        tl.set(nv.g, { x: p.cx, y: p.cy, scale: 0.55, autoAlpha: 0 }, 0);
-        tl.set(nv.score, { autoAlpha: 1 }, 0);
-        tl.set(nv.star, { autoAlpha: nv.n.critical ? 1 : 0 }, 0);
-        tl.set(nv.shield, { autoAlpha: 0 }, 0);
-      }
-      s.ids.forEach((id, i) => {
-        const nv = s.nodes[id], p = lin.pills[id], at = 0.3 + i * 0.06;
-        const tgt = A.G.sizeScale(s, nv.weight);
-        tl.to(nv.g, { x: nv.x, y: nv.y, scale: tgt, autoAlpha: 1, duration: 0.9, ease: "power3.inOut" }, at);
-        tl.to(p.g, { x: nv.x, y: nv.y, scale: 0.6, autoAlpha: 0, duration: 0.8, ease: "power3.inOut" }, at);
+      for (const id of s.ids) { const nv = s.nodes[id]; tl.set(nv.shield, { autoAlpha: 0 }, 0); }
+      tl.set(s.L.live, { autoAlpha: 1 }, 0.3);
+      tl.fromTo(s.ids.map((id) => s.nodes[id].g), { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.5 }, 0.3);
+      tl.fromTo(s.edges.map((e) => e.el), { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.5 }, 0.3);
+      s.guarded.forEach((id, k) => {
+        tl.fromTo(s.nodes[id].shield, { scale: 0, autoAlpha: 1 }, { scale: 0.85, autoAlpha: 1, duration: 0.35, ease: "back.out(2)" }, 1.0 + k * 0.08);
       });
-      tl.to(lin.colsG, { autoAlpha: 0, duration: 0.5 }, 0.2);
-      tl.to(s.edges.map((e) => e.el), { autoAlpha: 1, duration: 0.5 }, 1.3);
-      for (const id of s.guarded) {
-        const nv = s.nodes[id];
-        tl.fromTo(nv.shield, { scale: 0, autoAlpha: 1 }, { scale: 0.85, autoAlpha: 1, duration: 0.35, ease: "back.out(2)" }, 1.5);
+      let t = 1.6 + s.guarded.length * 0.08;
+      for (const it of s.cover) {
+        it.links.forEach((l, k) => tl.fromTo(l.path, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.45 }, t + k * 0.1));
+        tl.fromTo(it.tag, { autoAlpha: 0, scale: 0.6 }, { autoAlpha: 1, scale: 1, duration: 0.35, ease: "back.out(2)" }, t + 0.35);
+        t += 0.6;
       }
-      tl.set({}, {}, 2.0);
+      tl.set({}, {}, t + 0.3);
     },
 
-    11(tl, s) {
+    12(tl, s) {
       const web = [s.websiteG, ...s.webEdges.map((e) => e.el)];
       for (const nv of s.ids.map((i) => s.nodes[i])) tl.to(nv.shield, { autoAlpha: 0, duration: 0.2 }, 0);
+      for (const it of s.cover) tl.to([it.tag, ...it.links.map((l) => l.path)], { autoAlpha: 0, duration: 0.2 }, 0);
       tl.fromTo(web, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.5 }, 0.1);
       tl.set({}, {}, 0.7);
     },
 
-    12(tl, s) {
+    13(tl, s) {
       for (const id of s.guarded) {
         const nv = s.nodes[id];
         tl.fromTo(nv.shield, { scale: 0, autoAlpha: 1 }, { scale: 0.85, autoAlpha: 1, duration: 0.35, ease: "back.out(2)" }, 0.2 + s.guarded.indexOf(id) * 0.06);
@@ -436,72 +432,22 @@
       tl.set({}, {}, 0.9);
     },
 
-    13(tl, s) {
+    14(tl, s) {
       tl.to([s.L.live, s.L.legend, s.L.tray], { autoAlpha: 0, duration: 0.4 }, 0);
       tl.fromTo(s.L.results, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.4 }, 0.3);
       A.R.play(tl, 0.8);
     },
   };
 
-  // ---------------------------------------------------------------- blast-radius sequence (step 7 and gate click)
-  function blastSequence(tl, s, t0, cps, first) {
-    const lin = s.lin;
-    let t = t0;
-    if (first) {
-      tl.to(lin.colsG, { autoAlpha: 1, duration: 0.2 }, 0);
-      tl.fromTo(lin.rho.g, { autoAlpha: 0, x: 20 }, { autoAlpha: 1, x: 40, duration: 0.4 }, 0);
-      t += 0.4;
-    }
-    let prev = null;
-    for (const cp of cps) {
-      const gt = lin.gates[cp.id];
-      if (prev) {
-        for (const id of prev.downstream) A.L.setPillState(lin.pills[id], false, 0.25, tl, t);
-        t += 0.3;
-      }
-      tl.call(() => A.L.setRho(cp), null, t);
-      A.L.emphasise(cp.id, 0.25, tl, t);
-      // ripple from the gate tab
-      if (!A.rm()) {
-        const rip = svg("circle", { r: 8, fill: "none", stroke: C.st.compromised.stroke, "stroke-width": 4 });
-        s.L.fx.appendChild(rip); gsap.set(rip, { x: gt.x, y: 38, autoAlpha: 0 });
-        tl.fromTo(rip, { attr: { r: 8 }, autoAlpha: 0.8 }, { attr: { r: 170 }, autoAlpha: 0, duration: 1.0, ease: "power1.out" }, t + 0.1);
-      }
-      // counter ticks to rho
-      const proxy = { v: 0 }, rc = lin.rho;
-      tl.fromTo(proxy, { v: 0 }, { v: cp.rho, duration: 0.9, ease: "power1.out", onUpdate: () => { rc.num.textContent = fmt(proxy.v); } }, t + 0.2);
-      // downstream pills get hit, nearest first
-      const ds = cp.downstream.map((id) => lin.pills[id]).filter(Boolean).sort((a, b) => Math.abs(a.cx - gt.x) - Math.abs(b.cx - gt.x));
-      ds.forEach((p, i) => {
-        const at = t + 0.3 + i * 0.1 + Math.min(0.5, Math.abs(p.cx - gt.x) / 2400);
-        const toX = p.cx > gt.x ? p.cx - p.w / 2 : p.cx + p.w / 2;
-        if (!A.rm() && Math.abs(toX - gt.x) > 6) {
-          const ln = svg("line", { x1: gt.x, y1: p.cy, x2: toX, y2: p.cy, stroke: C.st.compromised.stroke, "stroke-width": 3, "stroke-dasharray": "7 5", "stroke-linecap": "round" });
-          s.L.fx.appendChild(ln);
-          tl.fromTo(ln, { drawSVG: "0%" }, { drawSVG: "100%", duration: 0.3, ease: "power1.in" }, at);
-        }
-        A.L.setPillState(p, true, 0.3, tl, at + 0.25);
-      });
-      t += 0.3 + ds.length * 0.1 + 0.9;
-      prev = cp;
-    }
-    tl.set({}, {}, t);
-  }
-
+  /** Clicking a checkpoint's equation (step 8) replays just that blast radius on the network. */
   function replayGate(id) {
-    const s = sc(); if (ST.cur !== 7) return;
+    const s = sc(); if (ST.cur !== 8) return;
     const cp = s.plan.checkpoints.find((c) => c.id === id); if (!cp) return;
-    killTl(); clearTmp(); applyView(7);
-    for (const pid of s.lin.order) A.L.setPillState(s.lin.pills[pid], false, 0);
+    killTl(); clearTmp(); applyView(8);
+    A.X.clearNodes(null, 0);
     const tl = gsap.timeline(); ST.tl = tl;
-    A.L.emphasise(null, 0);
-    blastSequence(tl, s, 0, [cp], false);
-    tl.eventCallback("onComplete", () => {
-      ST.tl = null; clearTmp();
-      // leave the replayed gate selected (a valid frame of this step)
-      for (const pid of s.lin.order) A.L.setPillState(s.lin.pills[pid], cp.downstream.includes(pid), 0);
-      A.L.emphasise(cp.id, 0); A.L.setRho(cp);
-    });
+    A.X.phase(tl, 0, cp, false);
+    tl.eventCallback("onComplete", () => { ST.tl = null; clearTmp(); applyView(8); });
   }
 
   // ---------------------------------------------------------------- play / next / prev
@@ -549,7 +495,7 @@
   function resetStep() {
     const n = ST.cur;
     if (A.state.running) A.live.abort();
-    if (n <= 0 || isLive(n) || n === 13 && false) { snap(n); return; }
+    if (n <= 0 || isLive(n)) { snap(n); return; }
     snap(n - 1);
     goTo(n);
   }

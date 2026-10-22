@@ -76,6 +76,12 @@ input[type=range]::-moz-range-thumb { width:24px; height:24px; border-radius:50%
 .ring-spin { animation:spin-dash 4s linear infinite; }
 .rm .ring-spin { animation:none; }
 .gate-hit { cursor:pointer; }
+@keyframes pulse-ring { 0%,100% { stroke-opacity:.15; stroke-width:3; } 50% { stroke-opacity:.9; stroke-width:6; } }
+.pulse-ring { animation:pulse-ring 1.8s ease-in-out infinite; }
+.rm .pulse-ring { animation:none; stroke-opacity:.7; }
+@keyframes flow-dash { to { stroke-dashoffset:-26; } }
+.cover-link { animation:flow-dash 1.2s linear infinite; }
+.rm .cover-link { animation:none; }
 
 /* ---- caption ---- */
 .caption { display:flex; align-items:center; justify-content:center; background:var(--surface); border-top:1px solid var(--line); border-left:4px solid var(--accent); padding:0 var(--pad); transition:border-color .2s; }

@@ -90,6 +90,32 @@ def test_all_manifests_build(path):
     assert {v for v, k in p["node_guards"].items() if k > 0} == expected
 
 
+@pytest.mark.parametrize("path", ALL, ids=lambda p: p.stem)
+def test_rho_terms_sum_to_rho(path):
+    p = build_plan(path, sim_trials=200)
+    for c in p["checkpoints"]:
+        assert sum(t["weight"] for t in c["rho_terms"]) == pytest.approx(c["rho"], abs=1e-9)
+        assert sorted(t["id"] for t in c["rho_terms"]) == c["downstream"]
+
+
+@pytest.mark.parametrize("path", ALL, ids=lambda p: p.stem)
+def test_boundaries_map_to_checkpoints(path):
+    p = build_plan(path, sim_trials=200)
+    by_id = {c["id"]: c for c in p["checkpoints"]}
+    assert len(p["boundaries"]) == len(p["bags"]) - 1
+    for i, b in enumerate(p["boundaries"]):
+        assert b["index"] == i and b["between"] == [i, i + 1]
+        assert b["nodes"] == sorted(set(p["bags"][i]) & set(p["bags"][i + 1]))
+        assert b["checkpoint"] in by_id
+        assert by_id[b["checkpoint"]]["nodes"] == b["nodes"]
+
+
+def test_pentest7_boundaries():
+    p = build_plan(PENTEST, sim_trials=200)
+    assert len(p["boundaries"]) == 4
+    assert [b["checkpoint"] for b in p["boundaries"]] == ["S1", "S1", "S2", "S2"]
+
+
 def test_build_plan_validation():
     with pytest.raises(ValueError):
         build_plan(PENTEST, alloc="nope")

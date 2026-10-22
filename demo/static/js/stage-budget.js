@@ -3,6 +3,7 @@
   "use strict";
   const { svg, g: mkG, C, fmt } = A;
   const ROW_GHOST = 516, ROW_SOLID = 546, BAR_Y = 592, TXT_Y = 630;
+  const COL_X0 = 330, COL_X1 = 1560, CARD_Y = 64, CARD_H = 236;
 
   // ------------------------------------------------------------------ budget
   function coinEl(r) {
@@ -33,10 +34,12 @@
   }
 
   function buildBudget(sc) {
-    const plan = sc.plan, lin = sc.lin, B = plan.budget;
-    const bud = sc.bud = { pot: null, potCoins: [], ghost: {}, slots: {}, bars: {}, shields: {} };
+    const plan = sc.plan, B = plan.budget, nc = plan.checkpoints.length;
+    const bud = sc.bud = { pot: null, potCoins: [], ghost: {}, slots: {}, bars: {}, shields: {}, cols: {}, cx: {} };
     const L = sc.L.budget;
-    const W = lin.pitch - 40;
+    const pitch = (COL_X1 - COL_X0) / nc;
+    plan.checkpoints.forEach((cp, i) => { bud.cx[cp.id] = COL_X0 + (i + 0.5) * pitch; });
+    const W = pitch - 40;
 
     // pot (left region)
     const pot = bud.pot = mkG(L); gsap.set(pot, { x: 40, y: 262 });
@@ -68,11 +71,23 @@
     const maxG = Math.max(...plan.checkpoints.map((c) => Math.max(c[sel], c[oth])), 1);
     const r = pickRadius(maxG, W);
     bud.r = r; bud.sel = sel; bud.oth = oth;
-    const maxBar = lin.pitch - 90;
+    const maxBar = pitch - 90;
     const barScale = maxBar / maxG;
 
     for (const cp of plan.checkpoints) {
-      const gt = lin.gates[cp.id], gx = gt.x;
+      const gx = bud.cx[cp.id];
+      // checkpoint card: id tab, the agents it sits on, and its blast radius
+      const cw = Math.min(pitch - 60, 330), card = bud.cols[cp.id] = mkG(L);
+      gsap.set(card, { x: gx });
+      card.append(svg("rect", { x: -cw / 2, y: CARD_Y, width: cw, height: CARD_H, rx: 14, fill: "#fff", stroke: C.gate, "stroke-width": 3 }));
+      card.append(svg("rect", { x: -33, y: CARD_Y + 18, width: 66, height: 32, rx: 9, fill: "#fff", stroke: C.gate, "stroke-width": 2.5 }));
+      A.icon(card, cp.boundary < 0 ? "arrowIn" : "lock", -16, CARD_Y + 34, 15, C.gate);
+      card.append(svg("text", { x: 9, y: CARD_Y + 41, "text-anchor": "middle", "font-size": 20, "font-weight": 700, fill: C.ink }, cp.id));
+      const who = svg("text", { y: CARD_Y + 84, "text-anchor": "middle", "font-weight": 600, fill: C.ink }, cp.nodes.join(" + "));
+      A.fitText(who, cp.nodes.join(" + "), cw - 28, 20, 13, 600);
+      card.append(who, svg("text", { y: CARD_Y + 108, "text-anchor": "middle", "font-size": 17, "font-weight": 500, fill: C.ink2, class: "sec" }, cp.boundary < 0 ? "the door from the outside world" : "bridge agents between bags"));
+      card.append(svg("text", { y: CARD_Y + 176, "text-anchor": "middle", "font-size": 44, "font-weight": 800, fill: C.ink, style: "font-variant-numeric:tabular-nums" }, "ρ = " + fmt(cp.rho)),
+        svg("text", { y: CARD_Y + 208, "text-anchor": "middle", "font-size": 18, "font-weight": 600, fill: C.ink2 }, "blast radius"));
       // ghost (other allocation) circles
       const gp = slotPositions(gx, ROW_GHOST, cp[oth], r, W);
       bud.ghost[cp.id] = gp.map(([x, y]) => {
@@ -126,6 +141,7 @@
       const sc = A.scene, bud = sc.bud, plan = sc.plan;
       A.B.labelRows();
       gsap.set(bud.pot, { autoAlpha: v.pot ? 1 : 0 });
+      for (const cp of plan.checkpoints) gsap.set(bud.cols[cp.id], { autoAlpha: v.budgetRow ? 1 : 0, y: 0 });
       const placed = v.coins === "placed";
       let used = 0;
       for (const cp of plan.checkpoints) used += cp[bud.sel];

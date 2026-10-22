@@ -29,8 +29,8 @@
     done: { undefended: false, defended: false },
     params: q,
   };
-  A.LAST_STEP = 13;
-  A.LIVE_STEPS = { 11: "undefended", 12: "defended" };
+  A.LAST_STEP = 14;
+  A.LIVE_STEPS = { 12: "undefended", 13: "defended" };
 
   /** Smallest legal budget = number of checkpoints (each needs >= 1 guard). */
   A.minBudget = () => Math.max(3, A.state.plan ? A.state.plan.checkpoints.length : 3);

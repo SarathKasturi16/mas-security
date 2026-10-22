@@ -123,12 +123,14 @@ def build_plan(
 
     checkpoints = []
     for i, cp in enumerate(cps):
+        down = downstream_set(m, cp, include_self=(i == 0))
         checkpoints.append({
             "id": f"S{i}",
             "nodes": sorted(cp),
             "boundary": boundaries[i],
-            "downstream": sorted(downstream_set(m, cp, include_self=(i == 0))),
+            "downstream": sorted(down),
             "rho": rho[i],
+            "rho_terms": _rho_terms(m, cp, down),
             "q_uniform": q_uni[i],
             "q_risk": q_risk[i],
             "q": q_sel[i],
@@ -137,6 +139,17 @@ def build_plan(
             "guards_risk": g_risk[i],
             "p_block": p_block(g_sel[i], p0),
             "p_block_q": p_block(q_sel[i], p0),
+        })
+
+    by_nodes = {tuple(c["nodes"]): c["id"] for c in checkpoints}
+    bag_boundaries = []
+    for i in range(len(bags) - 1):
+        shared = sorted(set(bags[i]) & set(bags[i + 1]))
+        bag_boundaries.append({
+            "index": i,
+            "between": [i, i + 1],
+            "nodes": shared,
+            "checkpoint": by_nodes.get(tuple(shared)),
         })
 
     node_spans = {}
@@ -175,6 +188,7 @@ def build_plan(
         "bags": [sorted(b) for b in bags],
         "node_spans": node_spans,
         "checkpoints": checkpoints,
+        "boundaries": bag_boundaries,
         "node_guards": node_guards,
     }
     if with_sim:
@@ -184,3 +198,19 @@ def build_plan(
 
 def _rho(m: Manifest, cp: set, include_self: bool) -> float:
     return blast_radius(m, cp, include_self=include_self)
+
+
+def _rho_terms(m: Manifest, cp: set, down: set) -> list[dict]:
+    """Per-node weights summed into rho, ordered by BFS distance from ``cp``, then id."""
+    dist = {v: 0 for v in cp}
+    frontier = list(cp)
+    while frontier:
+        nxt = []
+        for u in frontier:
+            for w in m.graph.successors(u):
+                if w not in dist:
+                    dist[w] = dist[u] + 1
+                    nxt.append(w)
+        frontier = nxt
+    order = sorted(down, key=lambda v: (dist.get(v, 0), v))
+    return [{"id": v, "weight": m.weight(v)} for v in order]

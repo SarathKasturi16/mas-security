@@ -130,7 +130,11 @@
     nv.ring2 = svg("rect", { x: -97, y: -51, width: 194, height: 102, rx: 22, fill: "none", stroke: C.block, "stroke-width": 2.5, opacity: 0 });
     nv.ring = svg("rect", { x: -90, y: -44, width: 180, height: 88, rx: 16, fill: "none", stroke: C.st.idle.stroke, "stroke-width": 3, opacity: 0 });
     nv.entryRing = svg("rect", { x: -92, y: -46, width: 184, height: 92, rx: 18, fill: "none", stroke: C.st.entry.stroke, "stroke-width": 3, "stroke-dasharray": "9 6", opacity: 0 });
-    root.append(nv.ring2, nv.ring, nv.entryRing);
+    // gate-coloured glow (blast-radius step) and "bridge agent" pulse ring (bags step); both sit behind the body
+    nv.gateRing = svg("rect", { x: -95, y: -49, width: 190, height: 98, rx: 20, fill: "none", stroke: C.gate, "stroke-width": 7, "stroke-opacity": 0.55, opacity: 0 });
+    nv.bagPulse = mkG(null); nv.bagPulse.appendChild(svg("rect", { class: "pulse-ring", x: -94, y: -48, width: 188, height: 96, rx: 20, fill: "none", stroke: C.gate, "stroke-width": 4 }));
+    gsap.set(nv.bagPulse, { autoAlpha: 0 });
+    root.append(nv.gateRing, nv.bagPulse, nv.ring2, nv.ring, nv.entryRing);
     nv.body = svg("rect", { x: -84, y: -38, width: NW, height: NH, rx: 12, fill: C.st.idle.fill, stroke: C.st.idle.stroke, "stroke-width": 2.5 });
     nv.hatch = svg("rect", { x: -84, y: -38, width: NW, height: NH, rx: 12, fill: "url(#hatch-red)", opacity: 0 });
     root.append(nv.body, nv.hatch);
@@ -169,10 +173,20 @@
     const tw0 = A.textW("EXPOSED", 18, 700);
     A.icon(nv.tag, "arrowIn", -tw0 / 2 - 14, -6, 20, C.st.entry.stroke);
     nv.tag.appendChild(svg("text", { x: 6, y: 0, "text-anchor": "middle", "font-size": 18, "font-weight": 700, fill: C.st.entry.stroke }, "EXPOSED"));
+    // "in N bags" tag (step 5) and checkpoint-id tag (step 8) above the node
+    nv.bagTag = mkG(root); gsap.set(nv.bagTag, { y: -62, autoAlpha: 0 });
+    nv.bagTagBg = svg("rect", { y: -14, height: 28, rx: 14, fill: "#fff", stroke: C.gate, "stroke-width": 2 });
+    nv.bagTagTxt = svg("text", { y: 6, "text-anchor": "middle", "font-size": 17, "font-weight": 700, fill: C.gate }, "");
+    nv.bagTag.append(nv.bagTagBg, nv.bagTagTxt);
+    nv.gtag = mkG(root); gsap.set(nv.gtag, { y: -62, autoAlpha: 0 });
+    nv.gtag.append(svg("rect", { x: -34, y: -15, width: 68, height: 30, rx: 9, fill: C.gate }));
+    A.icon(nv.gtag, "lock", -17, 0, 15, "#fff");
+    nv.gtagTxt = svg("text", { x: 9, y: 6, "text-anchor": "middle", "font-size": 18, "font-weight": 700, fill: "#fff" }, "");
+    nv.gtag.appendChild(nv.gtagTxt);
     // "has the passwords" label (step 3)
     nv.holds = mkG(root); gsap.set(nv.holds, { y: -58, autoAlpha: 0 });
     nv.holds.appendChild(svg("text", { "text-anchor": "middle", "font-size": 18, "font-weight": 700, fill: "#8A5A00" }, "has the passwords"));
-    for (const e of [root, nv.score, nv.star, nv.badge, nv.shield, nv.tag, nv.holds]) A.pivot(e);
+    for (const e of [root, nv.score, nv.star, nv.badge, nv.shield, nv.tag, nv.holds, nv.bagTag, nv.gtag, nv.bagPulse]) A.pivot(e);
     return nv;
   }
 
@@ -227,10 +241,12 @@
     root.replaceChildren();
     A.buildDefs(root);
     const L = {};
+    A.normalizePlan(plan);
     const sc = { plan, root, L, ids: plan.nodes.map((n) => n.id), nodes: {}, edges: [], webEdges: [] };
-    for (const k of ["title", "watermark", "lin", "legend", "tray"]) L[k] = mkG(root, { id: "L-" + k });
+    for (const k of ["title", "watermark", "cards", "legend", "tray"]) L[k] = mkG(root, { id: "L-" + k });
     L.live = mkG(root, { id: "L-live" });
-    L.edges = mkG(L.live); L.web = mkG(L.live); L.nodes = mkG(L.live); L.over = mkG(L.live); L.tmp = mkG(L.live);
+    L.blobs = mkG(L.live); L.edges = mkG(L.live); L.web = mkG(L.live); L.nodes = mkG(L.live); L.over = mkG(L.live); L.blobLab = mkG(L.live); L.cover = mkG(L.live); L.tmp = mkG(L.live);
+    L.blast = mkG(root, { id: "L-blast" });
     L.budget = mkG(root, { id: "L-budget" }); L.results = mkG(root, { id: "L-results" }); L.fx = mkG(root, { id: "L-fx" });
 
     const ws = plan.nodes.map((n) => n.weight);
@@ -239,6 +255,8 @@
     sc.web = lay.web;
     sc.nodes = {};
     for (const n of plan.nodes) sc.nodes[n.id] = makeNode(sc, n, lay.pos[n.id]);
+    sc.bagCount = {};
+    for (const n of plan.nodes) sc.bagCount[n.id] = plan.bags.filter((b) => b.includes(n.id)).length;
     sc.guarded = plan.nodes.filter((n) => (plan.node_guards[n.id] || 0) > 0).map((n) => n.id);
 
     // edges (drawn beneath nodes)
@@ -274,7 +292,7 @@
     buildLegend(sc);
     buildTray(sc);
     buildTitle(sc);
-    A.sceneParts.forEach((fn) => fn(sc));          // linear / budget / results register here
+    A.sceneParts.forEach((fn) => fn(sc));          // bags / blast / budget / results register here
     A.scene = sc;
     sc.reach = new Set(plan.nodes.filter((n) => n.entry).map((n) => n.id));
     for (let ch = true; ch;) {
@@ -284,7 +302,7 @@
     redrawEdges(sc);
     return sc;
   };
-  A.sceneParts = [];                                // filled by stage-linear/-budget
+  A.sceneParts = [];                                // filled by stage-bags/-blast/-budget
 
   // ------------------------------------------------------------------ title / legend / tray
   function buildTitle(sc) {
@@ -359,12 +377,26 @@
       });
       A.tw(tl, nv.ring, { attr: { stroke: c.stroke }, opacity: ringOn ? 1 : 0 }, dur, at);
       A.tw(tl, nv.ring2, { opacity: st === "blocked" ? 1 : 0 }, dur, at);
-      A.tw(tl, nv.hatch, { opacity: st === "compromised" ? 1 : 0 }, dur, at);
+      A.tw(tl, nv.hatch, { opacity: st === "compromised" || st === "exposed" ? 1 : 0 }, dur, at);
       if (!dur) gsap.set(nv.badge, { scale: glyph ? 1 : 0, autoAlpha: glyph ? 1 : 0 });
       else if (glyph && prev !== st) {
         (tl || gsap).fromTo(nv.badge, { scale: 0, autoAlpha: 1 }, { scale: 1, autoAlpha: 1, duration: 0.25, ease: "back.out(2)" }, tl ? at : undefined);
       } else if (!glyph) A.tw(tl, nv.badge, { scale: 0, autoAlpha: 0 }, 0.2, at);
       nv.g.setAttribute("aria-label", `Agent ${nv.id}: ${c.word.toLowerCase()}, risk ${fmt(nv.weight)}`);
+    },
+
+    /** "in N bags" tag text + background width. */
+    bagTagText(nv, n) {
+      nv.bagTagTxt.textContent = `in ${n} bags`;
+      const bw = A.textW(nv.bagTagTxt.textContent, 17, 700) + 24;
+      nv.bagTagBg.setAttribute("x", -bw / 2); nv.bagTagBg.setAttribute("width", bw);
+    },
+
+    /** Gate-coloured glow + checkpoint-id tag on an agent (blast-radius step). */
+    setGate(nv, on, id, dur, tl, at) {
+      if (on) A.when(dur ? tl : null, at, () => { nv.gtagTxt.textContent = id || ""; });
+      A.tw(tl, nv.gateRing, { opacity: on ? 1 : 0 }, dur, at);
+      A.tw(tl, nv.gtag, { autoAlpha: on ? 1 : 0 }, dur, at);
     },
 
     setScale(nv, s) { nv.sc = s; gsap.set(nv.g, { scale: s }); },
@@ -386,6 +418,12 @@
         nv.shieldTxt.textContent = String(k);
         gsap.set(nv.shield, { autoAlpha: v.nodeShields && k > 0 ? 1 : 0, scale: 0.85 });
         gsap.set(nv.entryRing, { autoAlpha: v.entry && nv.n.entry ? 1 : 0, scale: 1, transformOrigin: "50% 50%" });
+        const nb = sc.bagCount[id];
+        G.bagTagText(nv, nb);
+        gsap.set(nv.bagTag, { autoAlpha: v.bagTags && nb > 1 ? 1 : 0, scale: 1 });
+        gsap.set(nv.bagPulse, { autoAlpha: v.bagTags && nb > 1 ? 1 : 0 });
+        gsap.set(nv.gtag, { autoAlpha: 0 });
+        gsap.set(nv.gateRing, { opacity: 0 });
         gsap.set(nv.tag, { autoAlpha: v.entry && nv.n.entry ? 1 : 0 });
       }
       redrawEdges(sc);
@@ -431,6 +469,17 @@
         if (!frontier.length && next.size) frontier = [...next];
       }
       return waves;
+    },
+
+    /** Zoom the live layer so every agent sits between y = topU and y = bottomU (viewBox units);
+     *  used by the blast-radius step to make room for the equation panel. Never zooms in. */
+    squeeze(bottomU, dur) {
+      const sc = A.scene; if (!sc) return;
+      let y0 = Infinity, y1 = -Infinity;
+      for (const id of sc.ids) { const nv = sc.nodes[id]; y0 = Math.min(y0, nv.y - 38 * nv.sc - 46); y1 = Math.max(y1, nv.y + 38 * nv.sc + 22); }
+      const top = 14, s = Math.max(0.5, Math.min(1, (bottomU - top) / (y1 - y0)));
+      const t = s >= 0.995 && y0 >= top ? { x: 0, y: 0, scale: 1 } : { scale: s, x: 800 * (1 - s), y: top - y0 * s };
+      A.tw(null, sc.L.live, Object.assign({ svgOrigin: "0 0" }, t), dur === undefined ? 0.4 : dur);
     },
 
     /** Zoom the live layer so the network clears the log drawer. */
@@ -491,13 +540,16 @@
       return { all, head, remove() { all.forEach((n) => n.remove()); } };
     },
 
-    /** Add a token journey along `edge` ({d, mid}) to timeline `tl` at `at`. Returns the end time. */
-    travel(tl, tok, edge, at, dur, seq) {
+    /** Add a token journey along `edge` ({d, mid}) to timeline `tl` at `at`. Returns the end time.
+     *  `from`/`to` (0..1) travel only part of the arrow (a guard station stops the token before the agent). */
+    travel(tl, tok, edge, at, dur, seq, from, to) {
+      from = from || 0; to = to === undefined ? 1 : to;
       const m = /^M([-\d.]+),([-\d.]+)/.exec(edge.d);
       const x0 = parseFloat(m[1]), y0 = parseFloat(m[2]);
       if (A.rm()) {
         // reduced motion: a static numbered marker half-way along the edge
-        tl.set(tok.head, { x: edge.mid[0], y: edge.mid[1], autoAlpha: 1 }, at);
+        const pt = A.fx.edgePoint(edge, (from + to) / 2);
+        tl.set(tok.head, { x: pt[0], y: pt[1], autoAlpha: 1 }, at);
         if (seq) {
           const tx = svg("text", { y: -18, "text-anchor": "middle", "font-size": 18, "font-weight": 800, fill: C.token }, String(seq));
           tok.head.appendChild(tx);
@@ -506,10 +558,19 @@
       }
       for (const n of tok.all) {
         const lag = parseFloat(n.dataset.lag);
-        tl.set(n, { x: x0, y: y0, autoAlpha: 1 }, at);
-        tl.to(n, { motionPath: { path: edge.d, autoRotate: false }, duration: dur, ease: "power1.inOut" }, at + lag);
+        const p0 = from > 0 ? A.fx.edgePoint(edge, from) : [x0, y0];
+        tl.set(n, { x: p0[0], y: p0[1], autoAlpha: 1 }, at);
+        tl.to(n, { motionPath: { path: edge.d, autoRotate: false, start: from, end: to }, duration: dur, ease: "power1.inOut" }, at + lag);
       }
       return at + dur + 0.15;
+    },
+
+    /** Point at fraction f (0..1) along an edge's path. */
+    edgePoint(edge, f) {
+      if (edge.el && edge.el.getTotalLength) {
+        try { const L = edge.el.getTotalLength(), p = edge.el.getPointAtLength(L * f); return [p.x, p.y]; } catch (_) { /* detached */ }
+      }
+      return edge.mid;
     },
 
     shatter(tl, x, y, at, parent) {

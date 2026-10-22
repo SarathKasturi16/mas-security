@@ -1,4 +1,4 @@
-/* Live runs (steps 11 and 12): stream /api/run over SSE, feed events into an animation
+/* Live runs (steps 12 and 13): stream /api/run over SSE, feed events into an animation
  * queue so every event gets its own un-overlapped animation, mirror them into the log. */
 (function (A) {
   "use strict";
@@ -91,6 +91,7 @@
       if (ctx.my !== token) return null;             // aborted / superseded while the plan loaded
     }
     A.steps.snap(ctx.step);
+    ctx.guardedSet = new Set(ctx.guarded.length ? ctx.guarded : A.scene.guarded);
     A.G.compact(A.logs.isOpen(), 0);
     A.logs.add(ctx.mode, "SYSTEM", "system",
       `Run started: ${ev.mode}, backend ${ev.backend}, payload ${ev.payload}, ${ev.alloc} split, B=${ev.budget}, guards ${ev.guard_model}`,
@@ -102,29 +103,69 @@
     return null;
   }
 
+  /** Where a guarded agent's guards sit: on the incoming arrow, a short way before the agent. */
+  const STATION_BACK = 74;                           // viewBox units before the arrow tip
+  function incomingEdge(id, sources) {
+    const sc = A.scene;
+    return (sources && sources[0]) || sc.edges.find((e) => e.to === id) || sc.webEdges.find((w) => w.to === id) || null;
+  }
+  function stationOf(edge) {
+    let len = 200;
+    try { len = edge.el.getTotalLength(); } catch (_) { /* detached path */ }
+    const frac = Math.max(0.45, Math.min(0.92, 1 - STATION_BACK / Math.max(len, 1)));
+    return { edge, frac, P: A.fx.edgePoint(edge, frac) };
+  }
+
+  function stationShield(nv, st, k) {
+    const g = mkG(A.scene.L.tmp);
+    g.append(svg("circle", { r: 24, fill: "#fff", stroke: C.shield, "stroke-width": 3 }),
+      svg("path", { d: A.SHIELD_D, fill: C.shieldFill, stroke: C.shield, "stroke-width": 3, "stroke-linejoin": "round", transform: "scale(0.62)" }),
+      svg("text", { y: 6, "text-anchor": "middle", "font-size": 17, "font-weight": 800, fill: C.shield }, String(k)));
+    gsap.set(g, { x: st.P[0], y: st.P[1], autoAlpha: 0 });
+    A.pivot(g);
+    return g;
+  }
+
   function onAgentStart(ev, ctx) {
     const sc = A.scene, nv = nodeOf(ev.node);
     ctx.inputs[ev.node] = ev.input;
     const pr = preds(ev.node);
     const len = (ev.input || "").length;
+    const guarded = ctx.mode === "defended" && ctx.guardedSet.has(ev.node);
+    const from = pr.length ? `hand-off from ${pr.join(", ")}` : "the target page";
     A.logs.add(ctx.mode, "AGENT", ev.node,
-      pr.length ? `${ev.node} receives hand-off from ${pr.join(", ")} (${len} chars)` : `${ev.node} reads the target page (${len} chars)`,
+      guarded ? `incoming ${from} (${len} chars) is checked by ${ev.node}'s guards before ${ev.node} runs`
+        : pr.length ? `${ev.node} receives hand-off from ${pr.join(", ")} (${len} chars)` : `${ev.node} reads the target page (${len} chars)`,
       [["input", ev.input || ""]], ev);
     if (!nv) return null;
     const tl = gsap.timeline();
-    A.G.setState(nv, "active", 0.3, tl, 0);
+    if (!guarded) A.G.setState(nv, "active", 0.3, tl, 0);
     let sources = [];
     if (pr.length) sources = sc.edges.filter((e) => e.to === ev.node && ctx.infected.has(e.from));
     else if (ctx.payload !== "clean") sources = sc.webEdges.filter((w) => w.to === ev.node);
     const toks = []; let end = 0.45;
+    const rec = { toks, edges: sources, station: null };
+    let st = null;
+    if (guarded) {
+      const edge = incomingEdge(ev.node, sources);
+      if (edge) {
+        st = rec.station = stationOf(edge);
+        const sh = stationShield(nv, st, sc.plan.node_guards[ev.node] || 1);
+        rec.shield = sh;
+        ctx.tmp[ev.node] = [sh];
+        tl.fromTo(sh, { scale: 0.3, autoAlpha: 0 }, { scale: 1, autoAlpha: 1, duration: 0.3, ease: "back.out(2.4)" }, 0.25);
+        end = 0.9;
+      }
+    }
     sources.forEach((e, i) => {
       const tok = A.fx.token(sc.L.tmp, "attack"); toks.push(tok);
       const at = 0.1 + i * 0.12;
-      const fin = A.fx.travel(tl, tok, e, at, A.dur(0.9), ++ctx.seq);
+      const stop = st && e === st.edge ? st.frac : (guarded ? stationOf(e).frac : 1);
+      const fin = A.fx.travel(tl, tok, e, at, A.dur(0.9) * stop, ++ctx.seq, 0, stop);
       A.G.edgeStyle(e, "hot", 0.25, tl, at + 0.1);
       end = Math.max(end, fin);
     });
-    ctx.tokens[ev.node] = { toks, edges: sources };
+    ctx.tokens[ev.node] = rec;
     return padTo(tl, end);
   }
 
@@ -132,68 +173,86 @@
     const sc = A.scene, nv = nodeOf(ev.node);
     const votes = ev.votes || [], k = ev.k || votes.length, models = ev.models || [];
     const blocks = votes.filter(Boolean).length, cps = (ev.checkpoint || []).join("+") || "checkpoint";
+    const dirTxt = ev.direction === "outgoing" ? "outgoing hand-off from" : "incoming hand-off to";
     const det = votes.map((v, i) => [`G${i + 1}${models[i] ? " (" + models[i] + ")" : ""}`, v ? "BLOCK" : "PASS"]);
-    det.push(["rule", ev.rule || "any"]);
+    det.push(["rule", ev.rule || "any"], ["direction", ev.direction || "incoming"]);
     ctx.votes[ev.node] = ev;
-    A.logs.add(ctx.mode, ev.blocked ? "BLOCK" : "GUARD", ev.node,
-      ev.blocked ? `${cps} guards ${blocks}/${k}: BLOCK — ContextWipe applied` : `${cps} guards ${blocks}/${k}: PASS`, det, ev);
+    if (ev.guard_error) {
+      A.logs.add(ctx.mode, "ERROR", ev.node,
+        `${cps} guards could not check the ${dirTxt} ${ev.node} (backend error) — failed closed: input wiped, NOT counted as a detection`, det, ev);
+    } else {
+      A.logs.add(ctx.mode, ev.blocked ? "BLOCK" : "GUARD", ev.node,
+        `${cps} guards checked the ${dirTxt} ${ev.node}: ${blocks}/${k} voted BLOCK` + (ev.blocked ? ` — blocked, ContextWipe; ${ev.node} never sees the injection` : " — passed, nothing suspicious"), det, ev);
+    }
     if (!nv) return null;
-    const tl = gsap.timeline(), tmp = [];
-    const compact = k > 8, cw = compact ? 40 : 124, perRow = compact ? 14 : 6;
-    const rows = Math.ceil(k / perRow);
-    const hh = 38 * nv.sc;
-    // chips + banner go above the node when there is room, otherwise below it
-    const above = nv.y - hh - 34 - (rows - 1) * 42 - 17 - 70 >= 0;
-    const dir = above ? -1 : 1;
-    const rowW = Math.min(k, perRow) * cw - 8;
-    const cx = Math.max(40 + rowW / 2, Math.min(1560 - rowW / 2, nv.x));
-    const rowY = (r) => nv.y + dir * (hh + 34 + r * 42);
+    const tl = gsap.timeline(), tmp = ctx.tmp[ev.node] || [];
+    const tk = ctx.tokens[ev.node] || { toks: [], edges: [], station: null };
+    const st = tk.station || (() => { const e = incomingEdge(ev.node, tk.edges); return e ? stationOf(e) : null; })();
+    const P = st ? st.P : [nv.x - 84 * nv.sc - 40, nv.y];
+    // vote chips: a small grid on the incoming arrow, kept clear of the agent's own box
+    const cell = k > 12 ? 32 : 40, perRow = k <= 4 ? k : Math.min(10, Math.ceil(Math.sqrt(k * 1.5)));
+    const rows = Math.ceil(k / perRow), gw = perRow * cell, gh = rows * cell;
+    const left = P[0] <= nv.x, nodeL = nv.x - 84 * nv.sc, nodeR = nv.x + 84 * nv.sc;
+    let cx = left ? Math.min(P[0], nodeL - 12 - gw / 2) : Math.max(P[0], nodeR + 12 + gw / 2);
+    cx = Math.max(12 + gw / 2, Math.min(1588 - gw / 2, cx));
+    const above = P[1] - 32 - gh >= 62;
+    const gy0 = above ? P[1] - 32 - gh : P[1] + 32;
     votes.forEach((v, i) => {
       const r = Math.floor(i / perRow), c = i - r * perRow, inRow = Math.min(perRow, k - r * perRow);
-      const x = cx + (c - (inRow - 1) / 2) * cw, y = rowY(r);
-      const ch = chipEl(v, models[i] || "guard " + (i + 1), compact);
-      sc.L.tmp.appendChild(ch); gsap.set(ch, { x, y: y - dir * 10, autoAlpha: 0 });
-      tl.to(ch, { autoAlpha: 1, y, duration: A.dur(0.25), ease: "power2.out" }, 0.05 + i * (A.rm() ? 0 : 0.1));
-      tmp.push(ch);
+      const x = cx + (c - (inRow - 1) / 2) * cell, y = gy0 + r * cell + cell / 2;
+      const ch = chipEl(v, models[i] || "guard " + (i + 1), true);
+      if (cell < 40) ch.setAttribute("transform", "scale(0.82)");
+      const wrap = mkG(sc.L.tmp); wrap.appendChild(ch);
+      gsap.set(wrap, { x, y: y + (above ? 8 : -8), autoAlpha: 0 });
+      tl.to(wrap, { autoAlpha: 1, y, duration: A.dur(0.22), ease: "power2.out" }, 0.05 + i * (A.rm() ? 0 : 0.09));
+      tmp.push(wrap);
     });
-    const tChips = 0.3 + (A.rm() ? 0 : 0.1 * (k - 1));
-    const tVerdict = tChips + 0.4;
-    const bw = 380, bx = Math.max(40 + bw / 2, Math.min(1560 - bw / 2, nv.x));
-    const by = rowY(rows - 1) + dir * (17 + 40);
-    ctx.wipeBelow = above;                            // the ContextWipe tag takes the opposite side
-    const banner = bannerEl(ev.blocked ? "BLOCKED - attack stopped" : "ALLOWED - input clean", ev.blocked, bw);
-    sc.L.tmp.appendChild(banner); gsap.set(banner, { x: bx, y: by, autoAlpha: 0, scale: 0.9, transformOrigin: "50% 50%" });
+    const tChips = 0.3 + (A.rm() ? 0 : 0.09 * (k - 1));
+    const tVerdict = tChips + 0.35;
+    const label = ev.guard_error ? "GUARD ERROR (fail-closed)" : ev.blocked ? `BLOCKED ${blocks}/${k}` : `PASSED ${blocks}/${k}`;
+    const bw = A.textW(label, 22, 700) + 84, by = above ? gy0 - 30 : gy0 + gh + 30;
+    const banner = bannerEl(label, ev.blocked, bw);
+    sc.L.tmp.appendChild(banner);
+    gsap.set(banner, { x: Math.max(12 + bw / 2, Math.min(1588 - bw / 2, cx)), y: by, autoAlpha: 0, scale: 0.9, transformOrigin: "50% 50%" });
     tmp.push(banner);
     tl.to(banner, { autoAlpha: 1, scale: 1, duration: A.dur(0.25), ease: "back.out(2)" }, tVerdict);
-    tmp.push(banner);
+    let end = tVerdict + 0.75;
     if (ev.blocked) {
-      const tk = ctx.tokens[ev.node];
       if (!A.rm()) {
         tl.to(nv.shield, { scale: 1.25, duration: 0.12 }, tVerdict).to(nv.shield, { scale: 0.85, duration: 0.3, ease: "back.out(3)" }, tVerdict + 0.12);
         tl.set(nv.shield.firstChild, { attr: { fill: "#fff" } }, tVerdict).set(nv.shield.firstChild, { attr: { fill: C.shieldFill } }, tVerdict + 0.12);
-        tl.to(nv.g, { x: nv.x + 4, duration: 0.04, repeat: 3, yoyo: true }, tVerdict + 0.05).set(nv.g, { x: nv.x }, tVerdict + 0.25);
+        if (tk.shield) tl.to(tk.shield, { scale: 1.3, duration: 0.12, yoyo: true, repeat: 1 }, tVerdict);
       }
-      if (tk) {
-        for (const tok of tk.toks) {
-          tl.to(tok.all, { autoAlpha: 0, duration: 0.1 }, tVerdict);
-          A.fx.shatter(tl, nv.x - 84 * nv.sc, nv.y, tVerdict);
-        }
-        for (const e of tk.edges) A.G.edgeStyle(e, "cut", 0.25, tl, tVerdict);
-      }
+      // the token dies on the arrow, before it reaches the agent
+      for (const tok of tk.toks) tl.to(tok.all, { autoAlpha: 0, duration: 0.1 }, tVerdict);
+      if (tk.toks.length) A.fx.shatter(tl, P[0], P[1], tVerdict);
+      for (const e of tk.edges) A.G.edgeStyle(e, "cut", 0.25, tl, tVerdict);
+    } else {
+      // allowed: the agent starts working and any token carries on into it
+      A.G.setState(nv, "active", 0.3, tl, tVerdict + 0.15);
+      tk.toks.forEach((tok, i) => {
+        const e = tk.edges[i];
+        if (!e) return;
+        const sf = tk.station && e === tk.station.edge ? tk.station.frac : stationOf(e).frac;
+        A.fx.travel(tl, tok, e, tVerdict + 0.2, A.dur(0.9) * (1 - sf), undefined, sf, 1);
+      });
+      end = tVerdict + 1.3;
     }
     ctx.tmp[ev.node] = tmp;
-    return padTo(tl, tVerdict + 0.75);
+    return padTo(tl, end);
   }
 
   function onOutput(ev, ctx) {
     const sc = A.scene, nv = nodeOf(ev.node);
     const out = succ(ev.node), tgt = out.length ? out.join(", ") : "end of chain";
-    const detail = [["input", ctx.inputs[ev.node] || ""], ["output", ev.output || ""], ["upstream", (ev.upstream || []).join(", ") || "(target page)"]];
+    const detail = ev.wiped && ev.agent_input
+      ? [["input (after ContextWipe)", ev.agent_input], ["blocked hand-off", ctx.inputs[ev.node] || ""], ["output", ev.output || ""], ["upstream", (ev.upstream || []).join(", ") || "(target page)"]]
+      : [["input", ctx.inputs[ev.node] || ""], ["output", ev.output || ""], ["upstream", (ev.upstream || []).join(", ") || "(target page)"]];
     const vt = ctx.votes[ev.node];
-    if (vt) detail.push(["guard votes", (vt.votes || []).map((v) => (v ? "BLOCK" : "PASS")).join(" ") + "  rule=" + (vt.rule || "any")]);
+    if (vt) detail.push(["guard votes", (vt.votes || []).map((v) => (v ? "BLOCK" : "PASS")).join(" ") + "  rule=" + (vt.rule || "any") + "  direction=" + (vt.direction || "incoming")]);
     let level, msg;
     if (ev.error) { level = "ERROR"; msg = `${ev.node}: backend error — ${trunc((ev.output || "").replace(/\s+/g, " "), 110)}`; }
-    else if (ev.wiped) { level = "CLEAN"; msg = `${ev.node} → ${tgt}: ContextWipe applied, sanitised summary forwarded — clean`; }
+    else if (ev.wiped) { level = "CLEAN"; msg = `${ev.node} → ${tgt}: ContextWipe applied, ${ev.node} stayed clean, sanitised summary forwarded`; }
     else if (ev.compromised) { level = "INFECT"; msg = `${ev.node} → ${tgt}: output contains hidden instruction — INFECTED`; }
     else { level = "CLEAN"; msg = `${ev.node} → ${tgt}: output clean`; }
     A.logs.add(ctx.mode, level, ev.node, msg, detail, ev);
@@ -209,21 +268,16 @@
     if (ev.error) {
       absorb(); A.G.setState(nv, "error", 0.35, tl, 0);
     } else if (ev.wiped) {
-      A.G.setState(nv, "blocked", 0.25, tl, 0);
-      const hw = 84 * nv.sc, hh = 38 * nv.sc;
-      if (!A.rm()) {
-        const wipe = svg("rect", { x: -60, y: -hh - 4, width: 120, height: 2 * hh + 8, fill: "url(#wipe-grad)" });
-        sc.L.tmp.appendChild(wipe); gsap.set(wipe, { x: nv.x - hw - 120, y: nv.y });
-        tl.to(wipe, { x: nv.x + hw, duration: 0.5, ease: "power2.inOut" }, 0.3).call(() => wipe.remove(), null, 0.85);
-      }
-      A.G.setState(nv, "clean", 0.4, tl, 0.8);
+      // incoming check blocked the hand-off: the agent never saw the injection, it works on a clean summary
+      if (nv.state !== "active") A.G.setState(nv, "active", 0.25, tl, 0);
+      A.G.setState(nv, "clean", 0.4, tl, 0.55);
       const tag = mkG(sc.L.tmp);
-      const tw0 = 292;
+      const label = "ContextWipe applied", tw0 = A.textW(label, 18, 600) + 40;
       tag.append(svg("rect", { x: -tw0 / 2, y: -17, width: tw0, height: 34, rx: 17, fill: "#fff", stroke: C.block, "stroke-width": 2.5 }),
-        svg("text", { y: 6, "text-anchor": "middle", "font-size": 18, "font-weight": 600, fill: C.block }, "ContextWipe: memory cleared"));
-      const ty = ctx.wipeBelow === false ? nv.y - hh - 30 : nv.y + hh + 30;
-      gsap.set(tag, { x: Math.max(40 + tw0 / 2, Math.min(1560 - tw0 / 2, nv.x)), y: ty, autoAlpha: 0 });
-      tl.to(tag, { autoAlpha: 1, duration: 0.2 }, 0.8).to(tag, { autoAlpha: 0, duration: 0.3 }, 2.5).call(() => tag.remove(), null, 2.9);
+        svg("text", { y: 6, "text-anchor": "middle", "font-size": 18, "font-weight": 600, fill: C.block }, label));
+      const hh = 38 * nv.sc, below = nv.y + hh + 30 <= 612;
+      gsap.set(tag, { x: Math.max(40 + tw0 / 2, Math.min(1560 - tw0 / 2, nv.x)), y: below ? nv.y + hh + 30 : nv.y - hh - 30, autoAlpha: 0 });
+      tl.to(tag, { autoAlpha: 1, duration: 0.2 }, 0.55).to(tag, { autoAlpha: 0, duration: 0.3 }, 2.5).call(() => tag.remove(), null, 2.9);
       end = 1.25;
     } else if (ev.compromised) {
       absorb(); A.G.setState(nv, "compromised", 0.35, tl, 0.1);
@@ -231,7 +285,7 @@
     } else {
       absorb(); A.G.setState(nv, "clean", 0.35, tl, 0.05);
     }
-    // chips / banner from the guard vote fade a moment later
+    // station shield, chips and banner from the guard vote fade a moment later
     const tmp = ctx.tmp[ev.node];
     if (tmp && tmp.length) {
       tl.to(tmp, { autoAlpha: 0, duration: 0.3 }, Math.min(end - 0.2, 1.0)).call(() => tmp.forEach((n) => n.remove()), null, Math.min(end - 0.2, 1.0) + 0.35);
@@ -276,9 +330,9 @@
 
   // ---------------------------------------------------------------- queue + stream
   function runMode(mode, my, opts) {
-    const step = mode === "undefended" ? 11 : 12;
+    const step = mode === "undefended" ? 12 : 13;
     return new Promise((resolve) => {
-      const ctx = { mode, step, my, infected: new Set(), tokens: {}, tmp: {}, inputs: {}, votes: {}, seq: 0, payload: "poisoned", queue: [], busy: false, streamEnded: false, got: 0 };
+      const ctx = { mode, step, my, guardedSet: new Set(A.scene ? A.scene.guarded : []), infected: new Set(), tokens: {}, tmp: {}, inputs: {}, votes: {}, seq: 0, payload: "poisoned", queue: [], busy: false, streamEnded: false, got: 0 };
       cur = ctx;
       A.steps.goTo(step, { snap: true, fromLive: true });
       if (!A.logs.isOpen()) A.logs.open();

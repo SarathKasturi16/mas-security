@@ -100,8 +100,8 @@
     $("play-label").textContent = st.playing ? "Pause" : "Play";
     for (const id of ["btn-run-u", "btn-run-d", "btn-run-b"]) $(id).disabled = run;
     for (const id of ["sel-manifest", "rng-budget", "alloc-risk", "alloc-uniform", "sel-backend", "sel-guard", "num-seed", "tg-clean"]) $(id).disabled = run;
-    $("btn-run-u").classList.toggle("run-primary", n === 11 && !st.done.undefended);
-    $("btn-run-d").classList.toggle("run-primary", n === 12 && !st.done.defended);
+    $("btn-run-u").classList.toggle("run-primary", n === 12 && !st.done.undefended);
+    $("btn-run-d").classList.toggle("run-primary", n === 13 && !st.done.defended);
   }
 
   function wire() {
@@ -204,7 +204,7 @@
     const stepParam = parseInt(qs.get("step"), 10);
     if (auto) {
       const kind = ["undefended", "defended", "both"].includes(auto) ? auto : "undefended";
-      A.steps.snap(kind === "defended" ? 12 : 11);
+      A.steps.snap(kind === "defended" ? 13 : 12);
       if (qs.get("layout") === "side") { A.logs.setView("side"); }
       await A.live.start(kind);
       window.__runComplete = true;

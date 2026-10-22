@@ -54,7 +54,11 @@ window.App = window.App || {};
       entry:       { fill: "#FDEBDB", stroke: "#B45309", word: "Exposed" },
       critical:    { fill: "#FFF3C4", stroke: "#8A5A00", word: "Critical" },
       error:       { fill: "#FDEBDB", stroke: "#B45309", word: "Error" },
+      gate:        { fill: "#E2E8F0", stroke: "#334155", word: "Checkpoint" },
+      exposed:     { fill: "#FBE4E4", stroke: "#B42318", word: "At risk" },
     },
+    // saturated hues for bag blobs / card outlines; `bags` below are the matching pastel fills
+    bagHue: ["#3B82F6", "#10B981", "#F59E0B", "#A855F7", "#14B8A6", "#F97316", "#6366F1", "#84CC16"],
     bags: ["#E8F1FB", "#EAF6EE", "#FFF4DE", "#F4EAF8", "#E3F4F2", "#FDEBE0", "#EEF0FA", "#F3F1E4"],
   };
 
@@ -155,7 +159,7 @@ window.App = window.App || {};
       m.appendChild(A.svg("path", { d: "M0,0 L10,5 L0,10 z", fill: color }));
       defs.appendChild(m);
     };
-    mk("ah", A.C.edge); mk("ah-hot", A.C.edgeHot); mk("ah-entry", A.C.st.entry.stroke); mk("ah-cut", A.C.block); mk("ah-solid", A.C.ink);
+    mk("ah", A.C.edge); mk("ah-hot", A.C.edgeHot); mk("ah-entry", A.C.st.entry.stroke); mk("ah-cut", A.C.block); mk("ah-solid", A.C.ink); mk("ah-gate", A.C.gate);
     const grad = A.svg("linearGradient", { id: "wipe-grad", x1: 0, x2: 1, y1: 0, y2: 0 });
     for (const [o, a] of [[0, 0], [0.5, 0.95], [1, 0]]) grad.appendChild(A.svg("stop", { offset: o, "stop-color": "#fff", "stop-opacity": a }));
     defs.appendChild(grad);
@@ -163,6 +167,36 @@ window.App = window.App || {};
     for (const [o, c] of [[0, "#FFD84D"], [1, "#F2B705"]]) cg.appendChild(A.svg("stop", { offset: o, "stop-color": c }));
     defs.appendChild(cg);
     svg.appendChild(defs);
+  };
+
+  // ------------------------------------------------------------ plan normalisation
+  /** Make sure plan.boundaries and checkpoint.rho_terms exist. Newer servers send both; for older
+   *  ones derive them: boundary i = bag i intersect bag i+1, matched to the checkpoint with the same
+   *  agent set; rho terms = the checkpoint's downstream agents ordered by hop distance, then id. */
+  A.normalizePlan = function (plan) {
+    const w = {};
+    for (const n of plan.nodes) w[n.id] = n.weight;
+    const cps = plan.checkpoints;
+    if (!Array.isArray(plan.boundaries)) {
+      plan.boundaries = [];
+      for (let i = 0; i + 1 < plan.bags.length; i++) {
+        const shared = plan.bags[i].filter((x) => plan.bags[i + 1].includes(x)).sort();
+        const cp = cps.find((c) => c.boundary >= 0 && c.nodes.length === shared.length && c.nodes.every((x) => shared.includes(x)));
+        plan.boundaries.push({ index: i, between: [i, i + 1], nodes: shared, checkpoint: cp ? cp.id : null });
+      }
+    }
+    for (const cp of cps) {
+      if (Array.isArray(cp.rho_terms)) continue;
+      const dist = {}; let frontier = cp.nodes.slice();
+      for (const x of frontier) dist[x] = 0;
+      while (frontier.length) {
+        const nxt = [];
+        for (const u of frontier) for (const e of plan.edges) if (e.from === u && dist[e.to] === undefined) { dist[e.to] = dist[u] + 1; nxt.push(e.to); }
+        frontier = nxt;
+      }
+      cp.rho_terms = cp.downstream.slice().sort((a, b) => ((dist[a] || 0) - (dist[b] || 0)) || (a < b ? -1 : 1)).map((id) => ({ id, weight: w[id] }));
+    }
+    return plan;
   };
 
   // ------------------------------------------------------------ reduced motion / durations
