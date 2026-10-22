@@ -33,7 +33,9 @@ MANIFEST = REPO_ROOT / "manifests" / "pentest7_poc.json"  # cwd-independent
 
 # Distinct models per guard when the provider offers them (heterogeneous vote).
 GROQ_GUARD_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
-MAX_HANDOFF_CHARS = 2000   # keeps LLM inputs (and token spend) bounded along the graph
+# Bounds LLM inputs along the graph. Each agent reply is capped at 400 tokens (~1.6k chars),
+# so 6000 fits three upstream replies whole; a lower cap cut the last one off mid-text.
+MAX_HANDOFF_CHARS = 6000
 
 
 def iter_run(
