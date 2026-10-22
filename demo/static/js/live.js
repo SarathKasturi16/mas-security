@@ -300,13 +300,13 @@
     let verdictKind, text, sub, level, msg;
     if (ev.orch_pwned) {
       verdictKind = "bad"; text = (crit.join(", ") || "key agent") + " COMPROMISED";
-      sub = ev.rep_pwned ? "reporter taken over too" : "attack reached the key agent";
+      sub = ev.rep_pwned ? "reporter compromised" : "orchestrator compromised";
       level = "INFECT"; msg = `RESULT: ${crit.join(", ") || "orchestrator"} COMPROMISED${ev.rep_pwned ? ", reporter COMPROMISED" : ""}`;
     } else if (blocked.length) {
       verdictKind = "blocked"; text = "BLOCKED - attack stopped"; sub = "blocked at " + blocked.join(", ");
       level = "CLEAN"; msg = `RESULT: ${crit.join(", ") || "orchestrator"} clean — attack blocked at ${blocked.join(", ")}`;
     } else {
-      verdictKind = "ok"; text = "No compromise"; sub = "no hostile content reached the team";
+      verdictKind = "ok"; text = "No compromise"; sub = "no agent compromised";
       level = "CLEAN"; msg = "RESULT: no agent compromised";
     }
     A.logs.add(ctx.mode, level, "system", msg, [["orch_pwned", String(ev.orch_pwned)], ["rep_pwned", String(ev.rep_pwned)], ["blocked_at", blocked.join(", ") || "(none)"]], ev);

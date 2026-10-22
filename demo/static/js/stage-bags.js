@@ -172,10 +172,10 @@
       bv.bridges.push({ bd, lines });
     });
 
-    // ---- S0: the door from the outside world, with dashed pointers to the entry agents' chips
+    // ---- S0: the entry checkpoint, with dashed pointers to the entry agents' chips
     const s0cp = plan.checkpoints.find((c) => c.boundary < 0);
     if (s0cp) {
-      const s0 = bv.s0 = { cp: s0cp, g: mkG(sc.L.cards, { role: "img", "aria-label": "Checkpoint S0: the door from the outside world" }), ptr: [] };
+      const s0 = bv.s0 = { cp: s0cp, g: mkG(sc.L.cards, { role: "img", "aria-label": "Checkpoint S0: entry checkpoint" }), ptr: [] };
       s0.bar = svg("rect", { x: S0X - 5, y: gateTop, width: 10, height: busY - gateTop + 5, rx: 5, fill: C.gate });
       s0.g.appendChild(s0.bar);
       s0.tab = mkG(s0.g); gsap.set(s0.tab, { x: S0X, y: tabCy });
@@ -185,7 +185,7 @@
       A.pivot(s0.tab);
       s0.sign = mkG(s0.g);
       s0.sign.append(svg("rect", { x: S0X - 60, y: cardTop + 60, width: 120, height: 92, rx: 10, fill: "#fff", stroke: C.gate, "stroke-width": 2 }));
-      ["the door from", "the outside", "world"].forEach((t, i) => s0.sign.append(svg("text", { x: S0X, y: cardTop + 92 + i * 22, "text-anchor": "middle", "font-size": 16, "font-weight": 600, fill: C.ink }, t)));
+      ["entry", "checkpoint"].forEach((t, i) => s0.sign.append(svg("text", { x: S0X, y: cardTop + 92 + i * 22, "text-anchor": "middle", "font-size": 16, "font-weight": 600, fill: C.ink }, t)));
       const entries = s0cp.nodes.map((id) => {
         const bi = (rw.inBags[id] || [])[0];
         return bi === undefined ? null : { ch: bv.cards[bi].chips[id], cd: bv.cards[bi] };

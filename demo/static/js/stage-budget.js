@@ -85,7 +85,7 @@
       card.append(svg("text", { x: 9, y: CARD_Y + 41, "text-anchor": "middle", "font-size": 20, "font-weight": 700, fill: C.ink }, cp.id));
       const who = svg("text", { y: CARD_Y + 84, "text-anchor": "middle", "font-weight": 600, fill: C.ink }, cp.nodes.join(" + "));
       A.fitText(who, cp.nodes.join(" + "), cw - 28, 20, 13, 600);
-      card.append(who, svg("text", { y: CARD_Y + 108, "text-anchor": "middle", "font-size": 17, "font-weight": 500, fill: C.ink2, class: "sec" }, cp.boundary < 0 ? "the door from the outside world" : "bridge agents between bags"));
+      card.append(who, svg("text", { y: CARD_Y + 108, "text-anchor": "middle", "font-size": 17, "font-weight": 500, fill: C.ink2, class: "sec" }, cp.boundary < 0 ? "entry checkpoint" : "bridge agents between bags"));
       card.append(svg("text", { y: CARD_Y + 176, "text-anchor": "middle", "font-size": 44, "font-weight": 800, fill: C.ink, style: "font-variant-numeric:tabular-nums" }, "ρ = " + fmt(cp.rho)),
         svg("text", { y: CARD_Y + 208, "text-anchor": "middle", "font-size": 18, "font-weight": 600, fill: C.ink2 }, "blast radius"));
       // ghost (other allocation) circles
@@ -212,7 +212,9 @@
       const val = svg("text", { x: x + bw / 2, y: 500, "text-anchor": "middle", "font-size": 28, "font-weight": 700, fill: C.ink, style: "font-variant-numeric:tabular-nums" }, v.toFixed(3));
       const cat = svg("text", { x: x + bw / 2, y: 546, "text-anchor": "middle", "font-size": 22, "font-weight": 600, fill: C.ink }, r.label);
       const po = sim[r.key].p_orch;
-      const sub = svg("text", { x: x + bw / 2, y: 574, "text-anchor": "middle", "font-size": 18, fill: C.ink2, class: "sec" }, `key agent hit: ${(po * 100).toFixed(1)}%`);
+      const subTxt = `orchestrator compromised: ${(po * 100).toFixed(1)}%`;
+      const sub = svg("text", { x: x + bw / 2, y: 574, "text-anchor": "middle", fill: C.ink2, class: "sec" }, subTxt);
+      A.fitText(sub, subTxt, bw + 40, 18, 12, 400);
       gb.append(rect, pat, val, cat, sub);
       res.bars.push({ r, v, x, rect, pat, val, cat, sub, bw });
     });
@@ -223,7 +225,7 @@
       const x1 = first.x + first.bw / 2 + 24, x3 = last.x + last.bw / 2 - 8;
       const path = svg("path", { d: `M${x1},${Math.max(y1, 56)} C${x1 + 220},${Math.max(y1, 56) - 10} ${x3 - 120},${y3 - 60} ${x3},${y3}`, fill: "none", stroke: C.ink, "stroke-width": 3, "stroke-linecap": "round", "marker-end": "url(#ah-solid)" });
       const ratio = last.v > 0 ? first.v / last.v : Infinity;
-      const txt = svg("text", { x: (x1 + x3) / 2, y: Math.max(y1, 56) - 22, "text-anchor": "middle", "font-size": 22, "font-weight": 700, fill: C.ink }, isFinite(ratio) ? (ratio >= 100 ? "over 100x lower" : `${Math.round(ratio)}x lower`) : "eliminated");
+      const txt = svg("text", { x: (x1 + x3) / 2, y: Math.max(y1, 56) - 22, "text-anchor": "middle", "font-size": 22, "font-weight": 700, fill: C.ink }, isFinite(ratio) ? "" : "");   // no slogan label; the bar values speak for themselves
       L.append(path, txt);
       res.arrow = path; res.ratioTxt = txt;
     }

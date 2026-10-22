@@ -52,21 +52,21 @@
     const bare = (A.scene && A.scene.cover ? A.scene.cover : []).map((it) => it.id);
     const bareTxt = bare.length ? andList(bare) : "";
     return [
-      ["Can one poisoned web page take over a whole team of AI helpers?"],
+      [`Demo: containing a prompt injection in a ${n}-agent penetration-testing team.`],
       [`${n} AI agents work as a team on a security test. Each one passes its findings to the next.`],
       [`The target website is hostile. It hides a secret instruction (a `, { b: "prompt injection" }, `) in the page the first ${ent} agents read.`],
-      ["The hidden instruction spreads from agent to agent until the one holding the credentials (passwords) is taken over."],
+      ["The hidden instruction spreads from agent to agent until the orchestrator, which holds the credentials, is compromised."],
       ["Each agent gets a ", { b: "risk score" }, " from what it is allowed to do. Bigger means more damage if it is taken over."],
       ["A ", { b: "bag" }, " is a small group of agents that work closely together. Agents that appear in two neighbouring bags are the ", { b: "bridges" }, " between them."],
       ["Unfold the bags into cards. The ", { b: "bridge agents" }, " shared with the next card are highlighted and joined by a short line."],
-      ["A ", { b: "checkpoint" }, " sits on the bridge agents: every message crossing from one bag to the next passes through them. S0 is the door from the outside world."],
+      ["A ", { b: "checkpoint" }, " sits on the bridge agents: every message crossing from one bag to the next passes through them. S0 checks everything coming in from the target."],
       ["If an attack slips past a checkpoint, these agents are exposed (", { b: "blast radius" }, ", ρ). ρ adds up their risk scores. The checkpoint's own agents aren't counted; S0 counts the entry agents because the attack starts there."],
       [`We only have `, { b: `${B} guards` }, ` to spend. ` + (uni ? "Splitting evenly ignores where the damage would be biggest." : "Putting more where the damage would be biggest beats splitting evenly (the even split is rounded to whole guards).")],
-      ["Each spent coin is one more independent checker (", { b: "guard" }, `). With ${strongest.guards} guards, about ${Math.round(strongest.p_block * 100)}% of attacks are caught.`],
+      ["Each budget unit buys one ", { b: "guard" }, `. With ${strongest.guards} guards, about ${Math.round(strongest.p_block * 100)}% of attacks are caught.`],
       bare.length
         ? [bareTxt.charAt(0).toUpperCase() + bareTxt.slice(1) + (bare.length > 1 ? " have no guard of their own: every message they receive" : " has no guard of its own: every message it receives") + " must first pass a guarded checkpoint agent."]
         : ["Back on the real team: shields mark the agents that carry the guards."],
-      ["A real run with ", { b: "no protection" }, ". Watch the hidden instruction travel from the website to the key agent."],
+      ["A real run with ", { b: "no protection" }, ". The injection travels from the target to the orchestrator."],
       ["Now the guards check each hand-off ", { b: "before" }, " the agent receives it. If ", { b: "any" }, " guard says BLOCK, the message is destroyed and the agent gets a clean summary instead."],
       sim.none ? [`Share of the team's risk that gets compromised: ${p("none")} with no defence, ${p("uniform")} with equal guards, ${p("risk")} with our risk-based split.`] : ["No simulation data for this team."],
     ];

@@ -183,9 +183,9 @@
     A.icon(nv.gtag, "lock", -17, 0, 15, "#fff");
     nv.gtagTxt = svg("text", { x: 9, y: 6, "text-anchor": "middle", "font-size": 18, "font-weight": 700, fill: "#fff" }, "");
     nv.gtag.appendChild(nv.gtagTxt);
-    // "has the passwords" label (step 3)
+    // "holds credentials" label (step 3)
     nv.holds = mkG(root); gsap.set(nv.holds, { y: -58, autoAlpha: 0 });
-    nv.holds.appendChild(svg("text", { "text-anchor": "middle", "font-size": 18, "font-weight": 700, fill: "#8A5A00" }, "has the passwords"));
+    nv.holds.appendChild(svg("text", { "text-anchor": "middle", "font-size": 18, "font-weight": 700, fill: "#8A5A00" }, "holds credentials"));
     for (const e of [root, nv.score, nv.star, nv.badge, nv.shield, nv.tag, nv.holds, nv.bagTag, nv.gtag, nv.bagPulse]) A.pivot(e);
     return nv;
   }
@@ -283,7 +283,7 @@
     A.icon(wg, "globe", -22, -4, 40, "#fff");
     wg.append(svg("polygon", { points: "22,-22 40,10 4,10", fill: "#F2B705", stroke: "#8A6100", "stroke-width": 2, "stroke-linejoin": "round", transform: "translate(8,2)" }));
     wg.append(svg("text", { x: 30, y: 9, "text-anchor": "middle", "font-size": 18, "font-weight": 800, fill: "#16202D" }, "!"));
-    wg.append(svg("text", { x: 0, y: 44, "text-anchor": "middle", "font-size": 18, "font-weight": 600, fill: "#fff" }, "hostile site"));
+    wg.append(svg("text", { x: 0, y: 44, "text-anchor": "middle", "font-size": 18, "font-weight": 600, fill: "#fff" }, "malicious target"));
     sc.hidden = mkG(L.web);
     sc.hidden.append(svg("rect", { x: -75, y: 66, width: 150, height: 30, rx: 6, fill: "#fff", stroke: C.st.entry.stroke, "stroke-width": 2, "stroke-dasharray": "6 4" }),
       svg("text", { x: 0, y: 88, "text-anchor": "middle", "font-size": 18, class: "mono", fill: C.ink2, "font-weight": 600 }, "<!-- ... -->"));
@@ -308,10 +308,8 @@
   function buildTitle(sc) {
     const t = sc.L.title;
     const tx = (y, s, w, txt, fill) => t.appendChild(svg("text", { x: 800, y, "text-anchor": "middle", "font-size": s, "font-weight": w, fill: fill || C.ink, style: "letter-spacing:-0.01em" }, txt));
-    tx(240, 64, 700, "Stopping a Prompt-Injection Worm");
-    tx(318, 64, 700, "in AI Agent Teams");
-    tx(404, 28, 500, "Trust-Aware Topological Linearization of multi-agent systems", C.ink2);
-    tx(448, 28, 400, "B.Tech project  ·  IIIT Kottayam", C.ink2);
+    tx(270, 56, 700, "Trust Aware Topological Linearization");
+    tx(344, 56, 700, "for Securing LLM-Based Multi-Agent Systems");
     // 7-node watermark network
     const wm = sc.L.watermark;
     for (const e of sc.plan.edges) {
