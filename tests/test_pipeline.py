@@ -182,8 +182,15 @@ def test_api_run_bad(client, qs):
 
 
 def test_api_run_live_budget_capped(client):
-    # paid backends are capped at 10 guards; rejected before any LLM call is made
-    assert client.get("/api/run?mode=defended&backend=groq&budget=11").status_code == 400
+    # paid backends are capped at LIVE_BUDGET_MAX guards; rejected before any LLM call
+    assert client.get("/api/run?mode=defended&backend=groq&budget=7").status_code == 400
+
+
+def test_live_kill_switch_when_hosted(client, monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("MAS_ALLOW_LIVE", raising=False)
+    assert client.get("/api/run?mode=defended&backend=groq&budget=6").status_code == 403
+    assert client.get("/api/run?mode=defended&backend=stub").status_code == 200
 
 
 def test_dns_rebinding_host_rejected():

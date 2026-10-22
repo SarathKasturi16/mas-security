@@ -30,6 +30,7 @@ MANIFEST = REPO_ROOT / "manifests" / "pentest7_poc.json"  # cwd-independent
 
 # Distinct models per guard when the provider offers them (heterogeneous vote).
 GROQ_GUARD_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
+MAX_HANDOFF_CHARS = 2000   # keeps LLM inputs (and token spend) bounded along the graph
 
 
 def iter_run(
@@ -42,6 +43,7 @@ def iter_run(
     budget: int | None = None,
     guard_model: str = "heuristic",
     seed: int = 0,
+    deadline_s: float | None = None,
 ) -> Iterator[dict]:
     """Run the pipeline, yielding JSON-safe events as each step happens.
 
@@ -65,6 +67,9 @@ def iter_run(
     }
 
     backend = make_backend(backend_name)
+    if deadline_s is not None and hasattr(backend, "deadline"):
+        import time
+        backend.deadline = time.monotonic() + deadline_s   # whole-run cap for live LLMs
     guard_models: tuple[str, ...] = ()
     if getattr(backend, "provider", None) == "groq":
         guard_models = GROQ_GUARD_MODELS
@@ -106,7 +111,7 @@ def iter_run(
         if not preds:                                   # entry agent reads the target
             upstream = get_target_output(clean=clean)
         else:
-            upstream = "\n".join(outputs[p] for p in preds)
+            upstream = "\n".join(outputs[p] for p in preds)[:MAX_HANDOFF_CHARS]
 
         label = m.graph.nodes[node].get("label", node)
         yield {"type": "agent_start", "node": node, "label": label, "input": upstream}
@@ -126,7 +131,10 @@ def iter_run(
                 k=k, backend=backend, models=guard_models, rule="any",
                 guard_model=guard_model, p0=plan["p0"], rng=rng,
             )
-            block, votes = guards.blocks(out)
+            try:
+                block, votes = guards.blocks(out)
+            except Exception:  # noqa: BLE001 - a broken guard must not wave traffic through
+                block, votes = True, [True] * k
             if guard_model == "sim":
                 used = ["sim"] * k
             elif guard_models:

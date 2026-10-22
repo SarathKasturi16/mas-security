@@ -46,3 +46,16 @@ driven by the same `engine/pipeline.py:build_plan` the Monte-Carlo uses.
 ## Status (Phase 1)
 Components 1 & 2 core complete and tested; live demo works on the stub backend.
 Full statistical experiments (CIs) and the MAPTA/xOffense manifests are next.
+
+## Hosted demo (Vercel)
+
+Live at **https://mas-security-demo.vercel.app** (project `mas-security-demo`, account `j4ke-b`).
+
+```bash
+deploy/vercel/stage.sh --prod     # stage a clean copy (no .env, tests, venv) and deploy
+```
+
+Production env vars (set once with `vercel env add`, encrypted on Vercel):
+`GROQ_API_KEY` (live runs), `MAS_ALLOW_LIVE=1` (kill switch — remove or set `0` and
+redeploy to disable real-LLM runs), `MAS_ALLOWED_HOSTS` (extra domains to answer).
+Live runs are capped: ≤ 6 guards, 2,000-char hand-offs, 400 tokens/call, 100 s/run.

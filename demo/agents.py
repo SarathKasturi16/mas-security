@@ -83,6 +83,11 @@ class HTTPBackend:
         self.url, default_model, self.key_env = PROVIDERS[self.provider]
         self.model = self.model or default_model
         self.api_key = os.environ.get(self.key_env, "")
+        self.hosted = bool(os.environ.get("VERCEL"))
+        if self.hosted:                       # serverless: keep each run short
+            self.max_retries = min(self.max_retries, 1)
+            self.timeout = min(self.timeout, 15.0)
+        self.deadline: float | None = None    # time.monotonic() cut-off for a whole run
         if not self.api_key:
             raise RuntimeError(
                 f"{self.key_env} not set; put it in demo/.env or use MAS_BACKEND=stub"
@@ -99,22 +104,30 @@ class HTTPBackend:
         payload = {
             "model": model or self.model,
             "temperature": self.temperature,
+            "max_tokens": 400,
             "messages": [
                 {"role": "system", "content": instr},
                 {"role": "user", "content": user},
             ],
         }
+        if "gpt-oss" in payload["model"]:
+            payload["reasoning_effort"] = "low"   # else hidden reasoning eats max_tokens
         headers = {"Authorization": f"Bearer {self.api_key}"}
         # Free tiers rate-limit by requests/min; retry 429 (and transient 5xx)
         # honouring Retry-After, with exponential backoff.
         import time
 
         delay = 2.0
+        cap = 5.0 if self.hosted else 30.0
         for attempt in range(self.max_retries + 1):
+            if self.deadline is not None and time.monotonic() > self.deadline:
+                raise TimeoutError("run time limit reached")
             r = httpx.post(self.url, json=payload, headers=headers, timeout=self.timeout)
             if r.status_code in (429, 500, 502, 503) and attempt < self.max_retries:
                 wait = float(r.headers.get("retry-after", delay))
-                time.sleep(min(wait, 30.0))
+                if wait > cap:                # quota gone for a while; don't burn the run
+                    break
+                time.sleep(wait)
                 delay *= 2
                 continue
             r.raise_for_status()
