@@ -63,7 +63,7 @@ def test_guard_backend_error_is_not_a_detection(monkeypatch):
         def complete(self, *a, **kw):
             raise TimeoutError("run time limit reached")
 
-    monkeypatch.setattr(rd, "make_backend", lambda name=None: Broken())
+    monkeypatch.setattr(rd, "make_backend", lambda name=None, **kw: Broken())
     evs = list(rd.iter_run(defended=True, backend_name="broken", clean=True))
     votes = [e for e in evs if e["type"] == "guard_vote"]
     assert votes and all(v["guard_error"] and v["blocked"] for v in votes)

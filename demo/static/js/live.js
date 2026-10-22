@@ -1,5 +1,5 @@
-/* Live runs (steps 12 and 13): stream /api/run over SSE, feed events into an animation
- * queue so every event gets its own un-overlapped animation, mirror them into the log. */
+/* Live runs for the Attack lab (stage views 12 and 13): POST /api/run, feed the streamed events into an
+ * animation queue so every event gets its own un-overlapped animation, write them to the log viewer. */
 (function (A) {
   "use strict";
   const { svg, g: mkG, C, $ } = A;
@@ -22,36 +22,13 @@
   const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
   // ---------------------------------------------------------------- UI chrome
-  function setBadge(ctx, extra) {
-    const b = $("live-badge");
-    b.hidden = false;
-    b.className = "live-badge" + (ctx.mode === "defended" ? " def" : "");
-    ctx.badgeBase = ctx.mode === "defended" ? "Live run - DEFENDED" : "Live run - NO defence";
-    b.textContent = ctx.badgeBase + (extra ? " (" + extra + ")" : "") + " · 00:00.0";
-    clearInterval(ctx.timer);
-    ctx.t0 = performance.now();
-    ctx.timer = setInterval(() => {
-      b.textContent = ctx.badgeBase + (extra ? " (" + extra + ")" : "") + " · " + A.logs.fmtElapsed(performance.now() - ctx.t0).slice(0, 7);
-    }, 100);
-  }
-  function stopTimer(ctx) { clearInterval(ctx.timer); }
-
   function showMsg(text, err) {
     const m = $("stage-msg");
     if (!text) { m.hidden = true; return; }
     m.textContent = text; m.className = "stage-msg" + (err ? " err" : ""); m.hidden = false;
   }
-  function showVerdict(kind, text, sub) {
-    const v = $("verdict");
-    if (!kind) { v.hidden = true; return; }
-    v.className = "verdict " + kind;
-    v.replaceChildren(el(kind === "ok" ? "✓" : kind === "blocked" ? "✕" : "⚠"), el(text));
-    if (sub) v.appendChild(el(sub, "sub"));
-    v.hidden = false;
-    if (!A.rm()) gsap.fromTo(v, { scale: 0.9, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.25, ease: "back.out(2)" });
-    else gsap.set(v, { scale: 1, opacity: 1 });
-    function el(t, cls) { const s = A.el("span", cls, t); return s; }
-  }
+  /** One plain line under the lab controls, e.g. "orchestrator compromised". */
+  function showVerdict(text) { $("verdict").textContent = text || ""; }
   A.showVerdict = showVerdict;
 
   // ---------------------------------------------------------------- pieces drawn in the stage
@@ -78,24 +55,40 @@
   }
 
   const LIVE_TEAM_NOTE = "Live run uses the 7-agent pentest team (the only team with live agents)";
+  const preview = (text, canary, n) => {
+    const t = (text || "").replace(/\s+/g, " ").trim();
+    if (t.length <= n) return t;
+    const i = canary ? t.indexOf(canary) : -1;
+    if (i < 0) return t.slice(0, n - 3) + "...";
+    if (i + canary.length <= n - 3) return t.slice(0, n - 3) + "...";
+    const head = t.slice(0, 36), tail = t.slice(Math.max(36, i - 20), i + canary.length + 8);
+    return head + " ... " + tail;
+  };
 
   // ---------------------------------------------------------------- event handlers (return a timeline or promise)
   async function onRunStart(ev, ctx) {
-    ctx.payload = ev.payload; ctx.guarded = ev.guarded || [];
-    if (ev.plan && ev.plan.manifest && ev.plan.manifest !== A.state.manifest) {
-      const note = LIVE_TEAM_NOTE;
-      A.logs.add(ctx.mode, "SYSTEM", "system", note + ` (switching from ${A.state.manifest} to ${ev.plan.manifest})`, [], ev);
-      showMsg(note, false);
-      setTimeout(() => { const m = $("stage-msg"); if (m.textContent === note) m.hidden = true; }, 8000);
-      await A.main.switchManifest(ev.plan.manifest);
+    ctx.canary = ev.canary || ctx.req.goalToken || A.GOAL_TOKEN;
+    // The red attack token is drawn only when the target text really carries the goal token.
+    const injected = typeof ev.payload_text === "string" ? ev.payload_text.includes(ctx.canary) : ev.payload !== "clean";
+    ctx.payload = injected ? "poisoned" : "clean";
+    ctx.guarded = ev.guarded || [];
+    // The server's run is the truth: redraw when its team, budget or split differ from the scene on screen
+    // (e.g. a plan reload was still in flight when Run was pressed, or the budget was clamped for Groq).
+    const sp = A.state.plan, pl = ev.plan || {};
+    const manifestDiff = !!pl.manifest && pl.manifest !== A.state.manifest;
+    const planDiff = !!sp && ((ev.budget != null && ev.budget !== sp.budget) || (!!ev.alloc && ev.alloc !== sp.alloc));
+    if (manifestDiff || planDiff) {
+      if (manifestDiff) A.logs.note(LIVE_TEAM_NOTE + ` (switching from ${A.state.manifest} to ${pl.manifest})`, ev);
+      await A.main.syncPlan({ manifest: pl.manifest, budget: ev.budget, alloc: ev.alloc });
       if (ctx.my !== token) return null;             // aborted / superseded while the plan loaded
     }
     A.steps.snap(ctx.step);
     ctx.guardedSet = new Set(ctx.guarded.length ? ctx.guarded : A.scene.guarded);
-    A.G.compact(A.logs.isOpen(), 0);
-    A.logs.add(ctx.mode, "SYSTEM", "system",
-      `Run started: ${ev.mode}, backend ${ev.backend}, payload ${ev.payload}, ${ev.alloc} split, B=${ev.budget}, guards ${ev.guard_model}`,
-      [["payload_text", ev.payload_text || ""], ["guarded", (ev.guarded || []).join(", ") || "(none)"], ["order", (ev.order || []).join(" > ")]], ev);
+    A.G.compact(false, 0);
+    ctx.runNo = A.logs.beginRun({
+      mode: ctx.mode, backend: ev.backend || ctx.req.backend, preset: ev.preset || "recorded",
+      guardModel: ev.guard_model || ctx.req.guardModel, budget: ev.budget, alloc: ev.alloc, goalToken: ctx.canary,
+    });
     const tl = gsap.timeline();
     const sc = A.scene;
     if (!A.rm()) tl.fromTo(sc.websiteG, { scale: 0.96 }, { scale: 1, duration: 0.4, ease: "power2.out", transformOrigin: "50% 50%" }, 0);
@@ -132,11 +125,11 @@
     const pr = preds(ev.node);
     const len = (ev.input || "").length;
     const guarded = ctx.mode === "defended" && ctx.guardedSet.has(ev.node);
-    const from = pr.length ? `hand-off from ${pr.join(", ")}` : "the target page";
-    A.logs.add(ctx.mode, "AGENT", ev.node,
-      guarded ? `incoming ${from} (${len} chars) is checked by ${ev.node}'s guards before ${ev.node} runs`
-        : pr.length ? `${ev.node} receives hand-off from ${pr.join(", ")} (${len} chars)` : `${ev.node} reads the target page (${len} chars)`,
-      [["input", ev.input || ""]], ev);
+    const from = pr.length ? pr.join(", ") : "target";
+    A.logs.line({
+      kind: "agent", src: ev.node, tag: "IN", text: `<- ${from} (${len} chars)`,
+      full: "input:\n" + (ev.input || ""),
+    }, ev);
     if (!nv) return null;
     const tl = gsap.timeline();
     if (!guarded) A.G.setState(nv, "active", 0.3, tl, 0);
@@ -173,16 +166,22 @@
     const sc = A.scene, nv = nodeOf(ev.node);
     const votes = ev.votes || [], k = ev.k || votes.length, models = ev.models || [];
     const blocks = votes.filter(Boolean).length, cps = (ev.checkpoint || []).join("+") || "checkpoint";
-    const dirTxt = ev.direction === "outgoing" ? "outgoing hand-off from" : "incoming hand-off to";
-    const det = votes.map((v, i) => [`G${i + 1}${models[i] ? " (" + models[i] + ")" : ""}`, v ? "BLOCK" : "PASS"]);
-    det.push(["rule", ev.rule || "any"], ["direction", ev.direction || "incoming"]);
+    const det = votes.map((v, i) => `G${i + 1}${models[i] ? " (" + models[i] + ")" : ""}: ${v ? "BLOCK" : "PASS"}`);
+    det.push(`rule=${ev.rule || "any"}  direction=${ev.direction || "incoming"}`);
     ctx.votes[ev.node] = ev;
+    const voteSegs = [];
+    votes.forEach((v, i) => { if (i) voteSegs.push([" ", null]); voteSegs.push([v ? "BLOCK" : "PASS", v ? "st-block" : "st-pass"]); });
+    const head = `${cps} ${k} guard${k === 1 ? "" : "s"}: `;
     if (ev.guard_error) {
-      A.logs.add(ctx.mode, "ERROR", ev.node,
-        `${cps} guards could not check the ${dirTxt} ${ev.node} (backend error) — failed closed: input wiped, NOT counted as a detection`, det, ev);
+      A.logs.line({
+        kind: "guard", src: ev.node, tag: "GUARD", status: ["ERROR", "st-block"],
+        segs: [[head + "backend error -> failed closed, input wiped, not counted as a detection", null]], full: det.join("\n"),
+      }, ev);
     } else {
-      A.logs.add(ctx.mode, ev.blocked ? "BLOCK" : "GUARD", ev.node,
-        `${cps} guards checked the ${dirTxt} ${ev.node}: ${blocks}/${k} voted BLOCK` + (ev.blocked ? ` — blocked, ContextWipe; ${ev.node} never sees the injection` : " — passed, nothing suspicious"), det, ev);
+      A.logs.line({
+        kind: "guard", src: ev.node, tag: "GUARD", full: det.join("\n"),
+        segs: [[head, null], ...voteSegs, [ev.blocked ? " -> blocked, ContextWipe" : " -> passed", null]],
+      }, ev);
     }
     if (!nv) return null;
     const tl = gsap.timeline(), tmp = ctx.tmp[ev.node] || [];
@@ -244,18 +243,15 @@
 
   function onOutput(ev, ctx) {
     const sc = A.scene, nv = nodeOf(ev.node);
-    const out = succ(ev.node), tgt = out.length ? out.join(", ") : "end of chain";
-    const detail = ev.wiped && ev.agent_input
-      ? [["input (after ContextWipe)", ev.agent_input], ["blocked hand-off", ctx.inputs[ev.node] || ""], ["output", ev.output || ""], ["upstream", (ev.upstream || []).join(", ") || "(target page)"]]
-      : [["input", ctx.inputs[ev.node] || ""], ["output", ev.output || ""], ["upstream", (ev.upstream || []).join(", ") || "(target page)"]];
-    const vt = ctx.votes[ev.node];
-    if (vt) detail.push(["guard votes", (vt.votes || []).map((v) => (v ? "BLOCK" : "PASS")).join(" ") + "  rule=" + (vt.rule || "any") + "  direction=" + (vt.direction || "incoming")]);
-    let level, msg;
-    if (ev.error) { level = "ERROR"; msg = `${ev.node}: backend error — ${trunc((ev.output || "").replace(/\s+/g, " "), 110)}`; }
-    else if (ev.wiped) { level = "CLEAN"; msg = `${ev.node} → ${tgt}: ContextWipe applied, ${ev.node} stayed clean, sanitised summary forwarded`; }
-    else if (ev.compromised) { level = "INFECT"; msg = `${ev.node} → ${tgt}: output contains hidden instruction — INFECTED`; }
-    else { level = "CLEAN"; msg = `${ev.node} → ${tgt}: output clean`; }
-    A.logs.add(ctx.mode, level, ev.node, msg, detail, ev);
+    const out = succ(ev.node);
+    const full = ev.wiped && ev.agent_input
+      ? "input (after ContextWipe):\n" + ev.agent_input + "\n\nblocked hand-off:\n" + (ctx.inputs[ev.node] || "") + "\n\noutput:\n" + (ev.output || "")
+      : "input:\n" + (ctx.inputs[ev.node] || "") + "\n\noutput:\n" + (ev.output || "");
+    const segs = [[`"${preview(ev.output, ctx.canary, 110)}"`, null]];
+    if (ev.wiped) segs.push(["  (input wiped)", "dim"]);
+    if (out.length === 0) segs.push(["  (end of chain)", "dim"]);
+    const status = ev.error ? ["ERROR", "st-block"] : ev.compromised ? ["COMPROMISED", "st-bad"] : ["CLEAN", "st-pass"];
+    A.logs.line({ kind: "agent", src: ev.node, tag: "OUT", segs, status, full }, ev);
     if (ev.compromised && !ev.wiped) ctx.infected.add(ev.node);
     if (!nv) return null;
 
@@ -294,34 +290,39 @@
   }
 
   function onRunEnd(ev, ctx) {
-    const plan = A.scene.plan;
-    const crit = plan.nodes.filter((n) => n.critical).map((n) => n.id);
     const blocked = ev.blocked_at || [];
-    let verdictKind, text, sub, level, msg;
-    if (ev.orch_pwned) {
-      verdictKind = "bad"; text = (crit.join(", ") || "key agent") + " COMPROMISED";
-      sub = ev.rep_pwned ? "reporter compromised" : "orchestrator compromised";
-      level = "INFECT"; msg = `RESULT: ${crit.join(", ") || "orchestrator"} COMPROMISED${ev.rep_pwned ? ", reporter COMPROMISED" : ""}`;
+    const cpOf = (id) => { const v = ctx.votes[id]; return v && v.checkpoint && v.checkpoint.length ? ` (${v.checkpoint.join("+")})` : ""; };
+    const pwned = [];
+    if (ev.orch_pwned) pwned.push("orchestrator");
+    if (ev.rep_pwned) pwned.push("reporter");
+    const stopped = blocked.map((id) => id + cpOf(id)).join(", ");
+    let verdict, segs;
+    if (pwned.length) {
+      verdict = pwned.join(" and ") + " compromised";
+      segs = [];
+      pwned.forEach((n, i) => { segs.push([(i ? ", " : "") + n + " ", null], ["COMPROMISED", "st-bad"]); });
+      if (stopped) segs.push([`; attack stopped at ${stopped}`, null]);
     } else if (blocked.length) {
-      verdictKind = "blocked"; text = "BLOCKED - attack stopped"; sub = "blocked at " + blocked.join(", ");
-      level = "CLEAN"; msg = `RESULT: ${crit.join(", ") || "orchestrator"} clean — attack blocked at ${blocked.join(", ")}`;
+      verdict = "attack stopped at " + stopped;
+      segs = [[verdict + "; orchestrator ", null], ["clean", "st-pass"]];
+    } else if (ctx.infected.size) {
+      const who = [...ctx.infected].join(", ");
+      verdict = `${who} compromised; the attack did not reach the orchestrator`;
+      segs = [[who + " ", null], ["COMPROMISED", "st-bad"], ["; orchestrator ", null], ["clean", "st-pass"]];
     } else {
-      verdictKind = "ok"; text = "No compromise"; sub = "no agent compromised";
-      level = "CLEAN"; msg = "RESULT: no agent compromised";
+      verdict = "no agent compromised";
+      segs = [["no agent compromised", "st-pass"]];
     }
-    A.logs.add(ctx.mode, level, "system", msg, [["orch_pwned", String(ev.orch_pwned)], ["rep_pwned", String(ev.rep_pwned)], ["blocked_at", blocked.join(", ") || "(none)"]], ev);
-    showVerdict(verdictKind, text, sub);
-    stopTimer(ctx);
-    $("live-badge").textContent = ctx.badgeBase + " · finished " + A.logs.fmtElapsed(performance.now() - ctx.t0).slice(0, 7);
+    A.logs.endRun(segs, ev);
+    showVerdict(verdict);
     ctx.ended = true;
-    A.state.done[ctx.mode] = true;
+    ctx.result = { ok: true, verdict };
     return padTo(gsap.timeline(), 1.0);
   }
 
   function onFatal(ev, ctx) {
-    A.logs.add(ctx.mode, "ERROR", "system", "Server error: " + (ev.message || "unknown"), [["message", ev.message || ""]], ev);
+    A.logs.note("error: " + (ev.message || "unknown server error"), ev);
     showMsg("Run failed: " + (ev.message || "unknown server error"), true);
-    stopTimer(ctx);
     ctx.ended = true;
     return null;
   }
@@ -329,23 +330,21 @@
   const HANDLERS = { run_start: onRunStart, agent_start: onAgentStart, guard_vote: onVote, agent_output: onOutput, run_end: onRunEnd, fatal: onFatal };
 
   // ---------------------------------------------------------------- queue + stream
-  function runMode(mode, my, opts) {
-    const step = mode === "undefended" ? 12 : 13;
+  /** Run one attack. Resolves to {ok:true, verdict} or {refused:{status,message}} (the server said no
+   *  before any event, so the lab can fall back to the stub) or {failed:true}. */
+  function runMode(req, my) {
+    const mode = req.mode, step = mode === "undefended" ? 12 : 13;
     return new Promise((resolve) => {
-      const ctx = { mode, step, my, guardedSet: new Set(A.scene ? A.scene.guarded : []), infected: new Set(), tokens: {}, tmp: {}, inputs: {}, votes: {}, seq: 0, payload: "poisoned", queue: [], busy: false, streamEnded: false, got: 0 };
+      const ctx = { mode, req, step, my, guardedSet: new Set(A.scene ? A.scene.guarded : []), infected: new Set(), tokens: {}, tmp: {}, inputs: {}, votes: {}, seq: 0, payload: "poisoned", canary: req.goalToken, queue: [], busy: false, streamEnded: false, got: 0, result: null };
       cur = ctx;
       A.steps.goTo(step, { snap: true, fromLive: true });
-      if (!A.logs.isOpen()) A.logs.open();
-      A.logs.startRun(mode);
       showVerdict(null); showMsg("");
-      setBadge(ctx);
-      A.G.compact(true);
 
-      const finish = () => {
+      const finish = (result) => {
         if (ctx.finished) return; ctx.finished = true;
-        stopTimer(ctx); if (ctx.stream) ctx.stream.close();
+        if (ctx.stream) ctx.stream.close();
         if (cur === ctx) cur = null;
-        resolve();
+        resolve(result || ctx.result || { failed: true });
       };
       ctx.finish = finish;
 
@@ -357,7 +356,7 @@
         const ev = ctx.queue.shift();
         const fail = (e) => {
           console.error("live handler", ev.type, e);
-          A.logs.add(ctx.mode, "ERROR", "system", `Display error while handling "${ev.type}": ${(e && e.message) || e}`, [], null);
+          A.logs.note(`display error while handling "${ev.type}": ${(e && e.message) || e}`);
         };
         let p;
         try {
@@ -372,35 +371,27 @@
       const replay = () => {
         const evs = A.api.recorded(mode);
         if (!evs) {
-          A.logs.add(mode, "ERROR", "system", "Backend unreachable and no recorded run is available.", [], null);
+          A.logs.note("backend unreachable and no recorded run is available");
           showMsg("Backend unreachable. Start it with: python -m demo.server", true);
           ctx.end(); return;
         }
-        A.logs.add(mode, "ERROR", "system", "Backend unreachable - replaying recorded run", [], null);
+        A.logs.note("backend unreachable; replaying a recorded run (it ignores the payload you entered)");
         showMsg("Replaying recorded run", false);
-        setBadge(ctx, "recorded");
         evs.forEach((e) => ctx.queue.push(JSON.parse(JSON.stringify(e))));
         ctx.end();
       };
 
-      const runOpts = {
-        mode, backend: A.state.backend, clean: A.state.clean, alloc: A.state.alloc,
-        budget: A.state.budget, guardModel: A.state.guardModel, seed: A.state.seed,
-      };
-      ctx.stream = A.api.stream(runOpts, {
+      ctx.stream = A.api.stream(req, {
         onEvent: (ev) => { ctx.got++; ctx.push(ev); },
         onDone: () => ctx.end(),
-        onError: async (msg) => {
-          if (ctx.got === 0) {
-            // Replay only when the server is really unreachable. If it answers, show why it refused the run.
-            const d = await A.api.diagnose(runOpts);
-            if (ctx.finished || ctx.my !== token) return;
-            if (!d.reachable) { replay(); return; }
-            msg = d.status === 429 ? "A live LLM run is already in progress. Wait for it to finish, then try again."
-              : d.error ? "The server refused the run: " + d.error
-                : "The server is up but the run stream failed to start. Try again.";
-          }
-          A.logs.add(mode, "ERROR", "system", msg, [], null);
+        onRefused: (status, message) => {
+          if (ctx.finished || ctx.my !== token) return;
+          finish({ refused: { status, message } });
+        },
+        onUnreachable: () => { if (!ctx.finished && ctx.my === token) replay(); },
+        onError: (msg) => {
+          if (ctx.finished || ctx.my !== token) return;
+          A.logs.note("error: " + msg);
           showMsg(msg, true);
           ctx.end();
         },
@@ -409,17 +400,13 @@
   }
 
   A.live = {
-    /** kind: "undefended" | "defended" | "both". Resolves when all requested runs have finished. */
-    async start(kind) {
-      if (A.state.running) return;
+    /** req: {mode, backend, alloc, budget, guardModel, seed, goalToken, preset | payload}. */
+    async start(req) {
+      if (A.state.running) return { failed: true };
       const my = ++token;
       A.state.running = true; A.emit("runstate");
-      const modes = kind === "both" ? ["undefended", "defended"] : [kind];
       try {
-        for (const m of modes) {
-          if (my !== token) break;
-          await runMode(m, my);
-        }
+        return await runMode(req, my);
       } finally {
         if (my === token) { A.state.running = false; A.emit("runstate"); }
       }
@@ -428,7 +415,7 @@
       token++;
       if (activeTl) activeTl.kill();
       if (activeRes) { const r = activeRes; activeRes = null; r(); }
-      if (cur) { clearInterval(cur.timer); cur.finish(); }
+      if (cur) cur.finish({ failed: true });
       A.state.running = false; A.emit("runstate");
       showMsg(""); showVerdict(null);
     },

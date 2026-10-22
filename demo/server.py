@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import threading
 import time
 import webbrowser
@@ -25,7 +26,10 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
+from demo.agents import make_backend
 from demo.run_demo import iter_run
+from demo.agents import ROLE_PROMPTS
+from demo.target_mock import CANARY, PRESETS, get_preset
 from engine.manifest import load_manifest
 from engine.pipeline import ALLOCS, build_plan
 
@@ -39,6 +43,10 @@ LIVE_DEADLINE_S = 100.0       # whole-run time limit for live LLM runs
 GUARD_MODELS = ("heuristic", "sim")
 BACKENDS = ("stub", "groq")
 MODES = ("undefended", "defended")
+MAX_PAYLOAD_CHARS = 2000      # custom Attack-lab payload text (after stripping)
+MAX_BODY_BYTES = 16 * 1024    # POST /api/run body cap
+GOAL_TOKEN_RE = re.compile(r"[\x21-\x7e]{8,48}")   # printable ASCII, no spaces
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # control chars except \n and \t
 
 log = logging.getLogger(__name__)
 
@@ -106,26 +114,58 @@ def _bad(msg: str) -> Response:
     return resp
 
 
-def _choice(name: str, allowed, default: str) -> str:
-    val = request.args.get(name, default)
-    if val not in allowed:
+def _choice(src, name: str, allowed, default: str) -> str:
+    """Read ``name`` from ``src`` (query args or JSON dict) and check it is allowed."""
+    val = src.get(name, default)
+    if not isinstance(val, str) or val not in allowed:
         raise BadParam(f"invalid {name} {val!r}; allowed: {sorted(allowed)}")
     return val
 
 
-def _int_param(name: str, lo: int, hi: int, default: int | None) -> int | None:
-    raw = request.args.get(name)
+def _int_param(src, name: str, lo: int, hi: int, default: int | None) -> int | None:
+    raw = src.get(name)
     if raw is None or raw == "":
         return default
+    if isinstance(raw, (bool, float)):        # JSON true/false/3.9 are not integers
+        raise BadParam(f"{name} must be an integer")
     try:
         val = int(raw)
-    except ValueError:
+    except (TypeError, ValueError):
         raise BadParam(f"{name} must be an integer") from None
     if not lo <= val <= hi:
         raise BadParam(f"{name} must be between {lo} and {hi}")
     return val
 
+
+def _clean_payload(raw) -> str:
+    """Validate a custom payload: str, control chars stripped, non-empty, bounded."""
+    if not isinstance(raw, str):
+        raise BadParam("payload must be a string")
+    text = _CTRL_RE.sub("", raw).strip()
+    if not text:
+        raise BadParam("payload must not be empty")
+    if len(text) > MAX_PAYLOAD_CHARS:
+        raise BadParam(f"payload must be at most {MAX_PAYLOAD_CHARS} characters")
+    return text
+
+
+def _normal_traffic() -> str:
+    """Text agents produce or read on a clean run; a goal token found in it would
+    mark honest output as compromised."""
+    stub = "[x] processed upstream hand-off; forwarding findings. [ContextWipe] Untrusted hand-off"
+    return "\n".join([get_preset("clean"), stub, *ROLE_PROMPTS.values()]).lower()
+
+
+def _goal_token(raw) -> str:
+    if (not isinstance(raw, str) or not GOAL_TOKEN_RE.fullmatch(raw)
+            or raw.isalnum() or raw.lower() in _normal_traffic()):
+        raise BadParam("goal_token must be a distinctive token: 8-48 printable ASCII "
+                       "characters with a symbol, not found in normal agent output "
+                       "(e.g. [[MY-TOKEN-1]])")
+    return raw
+
 app = Flask(__name__, static_folder=None)
+app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES   # hard cap; Flask answers 413 beyond it
 
 
 @app.before_request
@@ -176,35 +216,88 @@ def api_manifests() -> Response:
 def api_plan() -> Response:
     """The full pipeline plan (decomposition, allocation, guards, simulation) as JSON."""
     try:
-        stem = _choice("manifest", MANIFEST_PATHS, DEFAULT_MANIFEST)
-        alloc = _choice("alloc", ALLOCS, "risk")
-        budget = _int_param("budget", BUDGET_MIN, BUDGET_MAX, None)
+        stem = _choice(request.args, "manifest", MANIFEST_PATHS, DEFAULT_MANIFEST)
+        alloc = _choice(request.args, "alloc", ALLOCS, "risk")
+        budget = _int_param(request.args, "budget", BUDGET_MIN, BUDGET_MAX, None)
         return jsonify(build_plan(MANIFEST_PATHS[stem], budget=budget, alloc=alloc))
     except (BadParam, ValueError) as e:
         return _bad(str(e))
 
 
-@app.get("/api/run")
+@app.get("/api/targets")
+def api_targets() -> Response:
+    """The mock-target presets for the Attack lab, in display order, with their text."""
+    return jsonify([
+        {"id": pid, "label": label, "text": get_preset(pid), "injected": pid != "clean"}
+        for pid, (label, _file) in PRESETS.items()
+    ])
+
+
+@app.route("/api/run", methods=["GET", "POST"])
 def api_run() -> Response:
-    """SSE stream of the demo pipeline for the requested mode/backend."""
-    clean = request.args.get("clean", "0") in ("1", "true", "yes")
+    """SSE stream of the demo pipeline for the requested mode/backend.
+
+    GET takes query params; POST takes the same fields as a JSON object plus the
+    Attack-lab extras ``preset``, ``payload`` (custom text, overrides preset) and
+    ``goal_token`` (custom canary).
+    """
+    if request.method == "POST":
+        if (request.content_length or 0) > MAX_BODY_BYTES:
+            resp = jsonify({"error": f"request body too large (max {MAX_BODY_BYTES} bytes)"})
+            resp.status_code = 413
+            return resp
+        try:
+            src = request.get_json(silent=True)
+        except RecursionError:                # absurdly nested JSON
+            src = None
+        if not isinstance(src, dict):
+            return _bad("body must be a JSON object")
+    else:
+        src = request.args
+    clean = str(src.get("clean", "0")).lower() in ("1", "true", "yes")
+    payload_text: str | None = None
+    preset: str | None = None
+    canary = CANARY
     try:
-        mode = _choice("mode", MODES, "undefended")
-        backend = _choice("backend", BACKENDS, "stub")
-        alloc = _choice("alloc", ALLOCS, "risk")
-        guard_model = _choice("guard_model", GUARD_MODELS, "heuristic")
+        mode = _choice(src, "mode", MODES, "undefended")
+        backend = _choice(src, "backend", BACKENDS, "stub")
+        if backend != "stub" and request.method != "POST":
+            raise BadParam("live LLM runs must be started with POST")
+        alloc = _choice(src, "alloc", ALLOCS, "risk")
+        guard_model = _choice(src, "guard_model", GUARD_MODELS, "heuristic")
         hi = BUDGET_MAX if backend == "stub" else LIVE_BUDGET_MAX
-        budget = _int_param("budget", BUDGET_MIN, hi, None)
-        seed = _int_param("seed", 0, 10**6, 0)
+        budget = _int_param(src, "budget", BUDGET_MIN, hi, None)
+        seed = _int_param(src, "seed", 0, 10**6, 0)
+        if request.method == "POST":
+            if src.get("payload") is not None:
+                payload_text = _clean_payload(src["payload"])
+            else:
+                preset = src.get("preset", "clean" if clean else "nmap_banner")
+                if not isinstance(preset, str) or preset not in PRESETS:
+                    raise BadParam(f"invalid preset {preset!r}; allowed: {list(PRESETS)}")
+            canary = _goal_token(src.get("goal_token", CANARY))
         # Validate budget vs. checkpoint count before streaming starts.
         build_plan(MANIFEST_PATHS[DEFAULT_MANIFEST], budget=budget, alloc=alloc, with_sim=False)
     except (BadParam, ValueError) as e:
         return _bad(str(e))
 
     live = backend != "stub"
+    if live and payload_text is not None:
+        # Free text on our key would make this a public LLM proxy; presets only.
+        resp = jsonify({"error": "custom payloads run on the offline stub; Groq runs only the built-in targets"})
+        resp.status_code = 403
+        return resp
     if live and not _live_allowed():
         resp = jsonify({"error": "live LLM runs are switched off on this deployment"})
         resp.status_code = 403
+        return resp
+    # Pre-flight: build the backend once so a missing API key is a clean 503 here,
+    # not a mid-stream failure. Done before taking the live slot.
+    try:
+        make_backend(backend, canary=canary)
+    except RuntimeError as e:   # message names the env var only, never a key value
+        resp = jsonify({"error": str(e)})
+        resp.status_code = 503
         return resp
     if live and not _take_live_slot():
         resp = jsonify({"error": "a live LLM run is already in progress"})
@@ -218,6 +311,7 @@ def api_run() -> Response:
                 manifest_path=MANIFEST_PATHS[DEFAULT_MANIFEST],
                 alloc=alloc, budget=budget, guard_model=guard_model, seed=seed,
                 deadline_s=LIVE_DEADLINE_S if live else None,
+                payload_text=payload_text, preset=preset, canary=canary,
             ):
                 yield f"data: {json.dumps(ev)}\n\n"
         except Exception as e:  # noqa: BLE001 - report to the client, don't 500 mid-stream

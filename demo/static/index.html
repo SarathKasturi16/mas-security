@@ -6,11 +6,15 @@
 <title>Trust Aware Topological Linearization</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body class="tab-algo">
 <div class="app" id="app">
 
   <header class="hdr">
     <h1><span class="t-long">Trust Aware Topological Linearization</span><span class="t-short">TATL Demo</span></h1>
+    <div class="tabs-main" role="tablist" aria-label="Demo sections">
+      <button type="button" role="tab" class="tabm on" id="tab-algo" data-tab="algo" aria-selected="true" aria-controls="stage">1. Algorithm</button>
+      <button type="button" role="tab" class="tabm" id="tab-lab" data-tab="lab" aria-selected="false" aria-controls="stage" tabindex="-1">2. Attack lab</button>
+    </div>
     <div class="cfg" role="group" aria-label="Scenario">
       <label class="fld">Team
         <select id="sel-manifest" aria-label="Agent team (manifest)"></select>
@@ -24,39 +28,78 @@
         <button type="button" class="seg-btn on" id="alloc-risk" role="radio" aria-checked="true">Risk split</button>
       </div>
     </div>
-    <div class="hdr-right">
-      <span id="live-badge" class="live-badge" hidden></span>
-      <span id="step-counter" class="step-counter">Step 0 / 14</span>
-    </div>
   </header>
+
+  <!-- Attack lab: target panel (left) -->
+  <section class="lab-only target" id="lab-target" aria-label="Mock target">
+    <h2>Mock malicious target</h2>
+    <label class="tf" for="lab-preset">Preset</label>
+    <select id="lab-preset" aria-label="Target preset"></select>
+    <label class="tf" for="lab-payload">Payload returned to the first agents</label>
+    <textarea id="lab-payload" spellcheck="false" autocomplete="off" autocapitalize="off" rows="12" aria-describedby="lab-count"></textarea>
+    <div class="count"><span id="lab-count">0 / 2000</span></div>
+    <label class="tf" for="lab-token">Goal token</label>
+    <input id="lab-token" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" maxlength="48" aria-describedby="lab-hint">
+    <p class="hint" id="lab-hint">Attack succeeds if an agent's output contains the goal token.</p>
+    <p class="hint warn" id="lab-msg" role="status" aria-live="polite" hidden></p>
+    <label class="tf" for="lab-backend">Backend</label>
+    <select id="lab-backend" aria-label="LLM backend">
+      <option value="groq">Groq (live)</option>
+      <option value="stub">Offline stub</option>
+    </select>
+    <p class="hint warn" id="lab-backend-hint" role="status" hidden></p>
+    <details class="adv" id="lab-adv">
+      <summary>Advanced</summary>
+      <label class="tf" for="lab-guard">Guard model</label>
+      <select id="lab-guard" aria-label="Guard model">
+        <option value="heuristic">Heuristic</option>
+        <option value="sim">Simulation (30%)</option>
+      </select>
+      <label class="tf" for="lab-seed">Seed</label>
+      <input id="lab-seed" type="number" min="0" max="1000000" value="0">
+    </details>
+  </section>
+
+  <!-- Attack lab: controls above the stage -->
+  <div class="lab-only labbar" id="lab-bar">
+    <button type="button" class="defsw" id="lab-def" role="switch" aria-checked="false">Defence: <span id="lab-def-txt">off</span></button>
+    <button type="button" class="runbtn" id="lab-run">Run attack</button>
+    <button type="button" class="stopbtn" id="lab-stop" hidden>Stop</button>
+    <span class="labinfo" id="lab-guards"></span>
+    <p class="verdict" id="verdict" role="status" aria-live="polite"></p>
+  </div>
 
   <main class="stage" id="stage">
     <svg id="svg" viewBox="0 0 1600 640" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Animated explainer stage"></svg>
-    <div id="verdict" class="verdict" hidden></div>
     <div id="stage-msg" class="stage-msg" hidden></div>
   </main>
 
-  <section class="caption" id="caption-bar">
+  <section class="caption algo-only" id="caption-bar">
     <p id="caption" role="status" aria-live="polite"></p>
   </section>
 
-  <nav class="ctl" aria-label="Step controller">
+  <nav class="ctl algo-only" aria-label="Step controller">
     <div class="ctl-l">
       <button type="button" class="btn" id="btn-prev" aria-label="Previous step"><span class="ic" aria-hidden="true">&#9664;</span><span class="lbl">Prev</span></button>
-      <button type="button" class="btn primary" id="btn-play" aria-label="Play"><span class="ic" aria-hidden="true">&#9654;</span><span class="lbl" id="play-label">Play</span></button>
-      <button type="button" class="btn" id="btn-next" aria-label="Next step"><span class="lbl" id="next-label">Next</span><span class="ic" aria-hidden="true">&#9654;</span></button>
+      <button type="button" class="btn primary" id="btn-next" aria-label="Next step"><span class="lbl">Next</span><span class="ic" aria-hidden="true">&#9654;</span></button>
     </div>
+    <span class="step-counter" id="step-counter">Step 0 / 12</span>
     <ol class="dots" id="dots" aria-label="Steps"></ol>
-    <div class="prog" id="prog">
-      <span class="prog-txt" id="prog-txt">Step 0 / 14</span>
-      <div class="prog-bar" id="prog-bar" role="slider" tabindex="0" aria-label="Step progress" aria-valuemin="0" aria-valuemax="14" aria-valuenow="0" aria-valuetext="Step 0 of 14"><div class="prog-fill" id="prog-fill"></div></div>
-    </div>
-    <div class="ctl-r" id="run-group" role="group" aria-label="Live runs">
-      <button type="button" class="btn danger" id="btn-run-u"><span class="x-long">Run undefended</span><span class="x-short">Undefended</span></button>
-      <button type="button" class="btn safe" id="btn-run-d"><span class="x-long">Run defended</span><span class="x-short">Defended</span></button>
-      <button type="button" class="btn" id="btn-run-b"><span class="x-long">Run both</span><span class="x-short">Both</span></button>
-    </div>
   </nav>
+
+  <!-- Attack lab: log viewer below the stage -->
+  <section class="lab-only logview" id="logview" aria-label="Agent output log viewer">
+    <div class="lv-top">
+      <h2>Agent output log viewer</h2>
+      <div class="lv-ctl">
+        <button type="button" class="tx" id="log-wrap" aria-pressed="false">[wrap: off]</button>
+        <button type="button" class="tx" id="log-filter">[filter: all]</button>
+        <button type="button" class="tx" id="log-save">[save .json]</button>
+        <button type="button" class="tx" id="log-clear">[clear]</button>
+      </div>
+    </div>
+    <div class="lv-body" id="log-body" role="log" tabindex="0" aria-label="Run output"></div>
+  </section>
 
   <section class="strip" id="strip" aria-label="Settings">
     <label class="fld">Speed
@@ -65,51 +108,17 @@
     </label>
     <label class="tgl"><input type="checkbox" role="switch" id="tg-rm"><span class="sw" aria-hidden="true"></span>Reduce motion</label>
     <label class="tgl"><input type="checkbox" role="switch" id="tg-labels" checked><span class="sw" aria-hidden="true"></span>Show labels</label>
-    <label class="fld">Backend
-      <select id="sel-backend" aria-label="LLM backend"><option value="stub" selected>stub</option><option value="groq">groq</option></select>
-    </label>
-    <label class="fld">Guards
-      <select id="sel-guard" aria-label="Guard model"><option value="heuristic" selected>Heuristic</option><option value="sim">Simulation (30%)</option></select>
-    </label>
-    <label class="fld">Seed
-      <input id="num-seed" type="number" min="0" max="1000000" value="0" aria-label="Random seed">
-    </label>
-    <label class="tgl"><input type="checkbox" role="switch" id="tg-clean"><span class="sw" aria-hidden="true"></span>Clean payload</label>
     <span class="sp"></span>
-    <button type="button" class="btn sm" id="btn-reset">Reset step</button>
-    <button type="button" class="btn sm" id="btn-restart">Restart</button>
+    <button type="button" class="btn sm algo-only" id="btn-reset">Reset step</button>
+    <button type="button" class="btn sm algo-only" id="btn-restart">Restart</button>
   </section>
 
   <footer class="tabbar">
     <div class="tabs-l">
-      <button type="button" class="logtab" id="btn-log" aria-expanded="false" aria-controls="drawer">
-        <span class="ic" aria-hidden="true" id="log-ic">&#9650;</span> Logs <span class="cnt" id="log-count">0</span>
-      </button>
       <button type="button" class="btn sm btn-settings" id="btn-settings" aria-expanded="false" aria-controls="strip"><span aria-hidden="true">&#9881;</span> Settings</button>
     </div>
-    <span class="keys">&#8592; &#8594; step &middot; Space next &middot; P play &middot; L logs &middot; R reduce motion</span>
+    <span class="keys algo-only">&#8592; &#8594; step &middot; Space next &middot; R reduce motion</span>
   </footer>
-
-  <aside class="drawer" id="drawer" aria-label="Run logs" hidden>
-    <div class="dr-top">
-      <div class="tabs" role="tablist" aria-label="Log view">
-        <button type="button" role="tab" class="tab" data-view="undefended" aria-selected="false">Undefended</button>
-        <button type="button" role="tab" class="tab" data-view="defended" aria-selected="false">Defended</button>
-        <button type="button" role="tab" class="tab on" data-view="both" aria-selected="true">Merged</button>
-        <button type="button" role="tab" class="tab" data-view="side" aria-selected="false">Side by side</button>
-      </div>
-      <div class="lv" id="lv-chips" role="group" aria-label="Level filters"></div>
-      <select id="log-src" aria-label="Source filter"><option value="">All sources</option></select>
-      <input id="log-search" type="search" placeholder="Search messages" aria-label="Search log messages">
-      <span class="lcount" id="log-shown">0 / 0</span>
-      <label class="mini"><input type="checkbox" id="log-announce"> Announce</label>
-      <button type="button" class="btn sm" id="log-dl">Download JSON</button>
-      <button type="button" class="btn sm" id="log-clear">Clear</button>
-      <button type="button" class="btn sm" id="log-close" aria-label="Close logs">&#10005;</button>
-    </div>
-    <div class="dr-body" id="log-body"></div>
-    <button type="button" class="jump" id="log-jump" hidden>Jump to latest &#8595;</button>
-  </aside>
 </div>
 
 <script src="/static/vendor/d3.min.js"></script>
@@ -127,6 +136,7 @@
 <script src="/static/js/logs.js"></script>
 <script src="/static/js/live.js"></script>
 <script src="/static/js/steps.js"></script>
+<script src="/static/js/lab.js"></script>
 <script src="/static/js/main.js"></script>
 <script src="/static/replay/replay.js"></script>
 </body>

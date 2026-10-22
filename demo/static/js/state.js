@@ -14,23 +14,27 @@
     manifests: [],
     budget: clampInt(num("budget", 10), 3, 30),
     alloc: q.get("alloc") === "uniform" ? "uniform" : "risk",
-    // A link must never start a paid run by itself: ?auto= always uses the offline stub.
-    backend: q.get("backend") === "groq" && !q.get("auto") ? "groq" : "stub",
+    // The Attack lab tries Groq first and falls back to the offline stub; ?backend=stub starts on the stub.
+    // A page load never starts a run by itself.
+    backend: q.get("backend") === "stub" ? "stub" : "groq",
     guardModel: q.get("guard_model") === "sim" ? "sim" : "heuristic",
     seed: clampInt(num("seed", 0), 0, 1000000),
-    clean: q.get("clean") === "1",
+    tab: "algo",                // "algo" | "lab"
     plan: null,                 // /api/plan response for the current selection
     step: 0,
-    playing: false,
     speed: 1,
     rm: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     labels: true,
     running: false,             // a live run is streaming / animating
-    done: { undefended: false, defended: false },
     params: q,
   };
   A.LAST_STEP = 14;
-  A.LIVE_STEPS = { 12: "undefended", 13: "defended" };
+  // The Algorithm tab walks these internal step indices in order; 12 and 13 (the live runs) belong to the Attack lab.
+  A.SEQ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14];
+  A.LAST_POS = A.SEQ.length - 1;          // the counter reads "Step k / 12"
+  A.LIVE_MANIFEST = "pentest7_poc";       // the only team with live agents
+  A.GOAL_TOKEN = "[[PWNED:exfil-creds]]"; // default goal token of the bundled presets
+  A.LIVE_BUDGET_MAX = 6;                  // server cap for non-stub runs
 
   /** Smallest legal budget = number of checkpoints (each needs >= 1 guard). */
   A.minBudget = () => Math.max(3, A.state.plan ? A.state.plan.checkpoints.length : 3);

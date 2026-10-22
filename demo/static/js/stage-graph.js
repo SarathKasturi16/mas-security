@@ -480,30 +480,10 @@
       A.tw(null, sc.L.live, Object.assign({ svgOrigin: "0 0" }, t), dur === undefined ? 0.4 : dur);
     },
 
-    /** Zoom the live layer so the network clears the log drawer. */
+    /** Put the live layer back at identity scale (the Attack lab has no overlay to clear any more). */
     compact(on, dur) {
       const sc = A.scene; if (!sc) return;
-      let t = { x: 0, y: 0, scale: 1 };
-      if (on) {
-        const r = A.$("svg").getBoundingClientRect();
-        const k = Math.min(r.width / VB_W, r.height / VB_H);
-        const oy = (r.height - VB_H * k) / 2;
-        const dr = A.$("drawer");
-        let availPx = r.height;
-        if (!dr.hidden && !dr.classList.contains("closing")) {
-          // layout position (offsetTop ignores the slide-in transform, so this is valid mid-animation)
-          const topPx = A.$("app").getBoundingClientRect().top + dr.offsetTop;
-          availPx = Math.min(r.height, topPx - r.top);
-        }
-        const availU = (availPx - oy) / k;
-        let y0 = Infinity, y1 = -Infinity;
-        for (const id of sc.ids) { const nv = sc.nodes[id]; y0 = Math.min(y0, nv.y - 38 * nv.sc - 14); y1 = Math.max(y1, nv.y + 38 * nv.sc + 14); }
-        const top = 64 / k + 8;
-        const s = Math.max(0.55, Math.min(1, (availU - top - 8) / (y1 - y0)));
-        t = s >= 0.995 ? t : { scale: s, x: 800 * (1 - s), y: top - y0 * s };
-        if (s >= 0.995) t.y = 0;
-      }
-      A.tw(null, sc.L.live, Object.assign({ svgOrigin: "0 0" }, t), dur === undefined ? 0.4 : dur);
+      A.tw(null, sc.L.live, { svgOrigin: "0 0", x: 0, y: 0, scale: 1 }, dur === undefined ? 0.4 : dur);
     },
   };
   const G = A.G;

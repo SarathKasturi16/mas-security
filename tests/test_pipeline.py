@@ -171,6 +171,10 @@ class _LoopbackClient:
         kw.setdefault("base_url", self._base)
         return self._c.get(*a, **kw)
 
+    def post(self, *a, **kw):
+        kw.setdefault("base_url", self._base)
+        return self._c.post(*a, **kw)
+
 
 @pytest.fixture
 def client():
@@ -215,8 +219,13 @@ def test_api_run_live_budget_capped(client):
 def test_live_kill_switch_when_hosted(client, monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.delenv("MAS_ALLOW_LIVE", raising=False)
-    assert client.get("/api/run?mode=defended&backend=groq&budget=6").status_code == 403
+    assert client.post("/api/run", json={"mode": "defended", "backend": "groq", "budget": 6}).status_code == 403
     assert client.get("/api/run?mode=defended&backend=stub").status_code == 200
+
+
+def test_live_run_needs_post(client):
+    # a paid run must not be startable by a cross-site <img>/<link> GET
+    assert client.get("/api/run?mode=defended&backend=groq&budget=6").status_code == 400
 
 
 def test_dns_rebinding_host_rejected():

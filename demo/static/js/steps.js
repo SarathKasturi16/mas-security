@@ -1,4 +1,5 @@
-/* Step controller: 15 frames (0-14). Each step has
+/* Step controller. Frames 0-14 exist internally; the Algorithm tab walks A.SEQ (all but 12 and 13) and the
+ * Attack lab uses 12 (no defence) and 13 (defence on). Each step has
  *   VIEW[n]   - the complete end state (applied instantly and idempotently by snap()), and
  *   PLAY[n]   - a GSAP timeline that animates the transition from VIEW[n-1] to VIEW[n].
  * Moving forward one step plays the timeline then re-applies VIEW[n]; jumping or going back snaps. */
@@ -73,13 +74,18 @@
   }
 
   // ---------------------------------------------------------------- state
-  const ST = { cur: -1, tl: null, dwell: null, pending: null };
+  const ST = { cur: -1, tl: null, pending: null };
   const sc = () => A.scene;
   const isLive = (n) => n === 12 || n === 13;
+  const inLab = () => A.state.tab === "lab";
+  const seqPos = (n) => A.SEQ.indexOf(n);
+  const seqNext = (n) => { const i = seqPos(n); return i >= 0 && i < A.LAST_POS ? A.SEQ[i + 1] : -1; };
+  const seqPrev = (n) => { const i = seqPos(n); return i > 0 ? A.SEQ[i - 1] : -1; };
+  /** The view a forward transition into n starts from. */
+  const viewBefore = (n) => (n === 13 ? 12 : n === 14 ? 11 : n - 1);
 
   /** Kill the running step timeline and settle the promise that goTo()/play() handed out for it,
-   *  so nothing awaiting a step (the autoplay tick) is left hanging. The autoplay dwell timer is NOT
-   *  touched here: only stopPlay() ends autoplay. */
+   *  so nothing awaiting a step is left hanging. */
   function killTl() {
     if (ST.tl) { ST.tl.kill(); ST.tl = null; }
     gsap.killTweensOf(sc() ? [sc().L.live] : []);
@@ -95,7 +101,7 @@
     const v = view(n), s = sc();
     A.G.apply(v); A.K.apply(v); A.X.apply(v); A.B.apply(v); A.R.apply(v);
     gsap.set(s.L.live, { autoAlpha: 1 });
-    if (v.squeeze) A.G.squeeze(s.blast.bottomU, 0); else A.G.compact(isLive(n) && A.logs.isOpen(), 0);
+    if (v.squeeze) A.G.squeeze(s.blast.bottomU, 0); else A.G.compact(false, 0);
   }
 
   // ---------------------------------------------------------------- chrome (caption, dots, counters)
@@ -117,15 +123,16 @@
   }
 
   function chrome(n, animateCaption) {
-    $("step-counter").textContent = `Step ${n} / ${A.LAST_STEP}`;
-    document.querySelectorAll("#dots .dot").forEach((d, i) => {
-      d.classList.toggle("done", i < n); d.classList.toggle("cur", i === n);
-      d.setAttribute("aria-current", i === n ? "step" : "false");
-    });
-    const live = isLive(n);
-    $("live-badge").hidden = !live || !A.state.running;
-    if (!live) { A.showVerdict(null); $("stage-msg").hidden = true; }
-    setCaption(n, animateCaption);
+    if (!inLab()) {
+      const pos = Math.max(0, seqPos(n));
+      $("step-counter").textContent = `Step ${pos} / ${A.LAST_POS}`;
+      document.querySelectorAll("#dots .dot").forEach((d, i) => {
+        d.classList.toggle("done", i < pos); d.classList.toggle("cur", i === pos);
+        d.setAttribute("aria-current", i === pos ? "step" : "false");
+      });
+      setCaption(n, animateCaption);
+    }
+    if (!isLive(n)) { A.showVerdict(null); $("stage-msg").hidden = true; }
     A.emit("chrome", n);
   }
 
@@ -149,7 +156,7 @@
 
   function play(n) {
     killTl(); clearTmp();
-    const prev = n - 1;
+    const prev = viewBefore(n);
     ST.cur = n;
     applyView(prev);
     gsap.set($("svg"), { opacity: 1 });
@@ -180,16 +187,15 @@
     });
   }
 
-  /** Navigate. Animates only for a single forward step; everything else snaps.
+  /** Navigate. Animates only for one forward step (the next frame of the sequence, or opts.animate for
+   *  the lab's 12 -> 13); everything else snaps.
    *  opts.snap     never animate.
-   *  opts.fromLive navigation issued by the live run itself (exempt from the abort-on-navigate rule).
-   *  opts.auto     issued by the autoplay tick (does not cancel autoplay); any other call is manual and does. */
+   *  opts.fromLive navigation issued by the live run itself (exempt from the abort-on-navigate rule). */
   function goTo(n, opts) {
     opts = opts || {};
     n = Math.max(0, Math.min(A.LAST_STEP, n));
-    if (!opts.auto && !opts.fromLive) stopPlay();
     if (A.state.running && !(opts.fromLive && isLive(n))) A.live.abort();
-    const forward = ST.cur >= 0 && n === ST.cur + 1 && !opts.snap;
+    const forward = !opts.snap && ST.cur >= 0 && (opts.animate ? n === 13 && ST.cur === 12 : n === seqNext(ST.cur));
     if (forward) return A.rm() ? fadeSwitch(n) : play(n);
     snap(n);
     return Promise.resolve();
@@ -450,53 +456,24 @@
     tl.eventCallback("onComplete", () => { ST.tl = null; clearTmp(); applyView(8); });
   }
 
-  // ---------------------------------------------------------------- play / next / prev
-  function liveModeFor(n) { return A.LIVE_STEPS[n]; }
-
-  /** Advance one step; at an unfinished live step this starts the run instead. */
-  function advance(auto) {
-    const n = ST.cur;
-    if (A.state.running) return Promise.resolve();
-    const mode = liveModeFor(n);
-    if (mode && !A.state.done[mode]) return A.live.start(mode);
-    if (n >= A.LAST_STEP) return Promise.resolve();
-    return goTo(n + 1, { auto });
-  }
-  /** Manual Next: ends autoplay, then advances. */
+  // ---------------------------------------------------------------- next / prev
+  /** Algorithm tab: animate to the next frame. */
   function next() {
-    if (A.state.running) return Promise.resolve();
-    stopPlay();
-    return advance(false);
+    const n = seqNext(ST.cur);
+    if (n < 0) return Promise.resolve();
+    return goTo(n);
   }
-  /** Manual Prev. Blocked while a live run is streaming (the run owns the stage). */
+  /** Algorithm tab: snap back one frame. */
   function prev() {
-    if (A.state.running || ST.cur <= 0) return;
-    goTo(ST.cur - 1, { snap: true });
+    const n = seqPrev(ST.cur);
+    if (n < 0) return;
+    goTo(n, { snap: true });
   }
-
-  function stopPlay() {
-    A.state.playing = false;
-    if (ST.dwell) { ST.dwell.kill(); ST.dwell = null; }
-    A.emit("playstate");
-  }
-  function startPlay() {
-    A.state.playing = true; A.emit("playstate");
-    const tick = async () => {
-      if (!A.state.playing) return;
-      if (ST.cur >= A.LAST_STEP) { stopPlay(); return; }
-      await advance(true);
-      if (!A.state.playing) return;
-      ST.dwell = gsap.delayedCall(2, tick);
-    };
-    tick();
-  }
-  function togglePlay() { A.state.playing ? stopPlay() : startPlay(); }
 
   function resetStep() {
-    const n = ST.cur;
-    if (A.state.running) A.live.abort();
-    if (n <= 0 || isLive(n)) { snap(n); return; }
-    snap(n - 1);
+    const n = ST.cur, p = seqPrev(n);
+    if (p < 0) { snap(n); return; }
+    snap(p);
     goTo(n);
   }
   /** Title slide with its entrance animation. */
@@ -510,14 +487,13 @@
     tl.eventCallback("onComplete", () => finish(0));
   }
   function restart() {
-    stopPlay(); if (A.state.running) A.live.abort();
-    A.state.done.undefended = false; A.state.done.defended = false;
+    if (A.state.running) A.live.abort();
     intro();
   }
 
   A.steps = {
-    TITLES, view, goTo, snap, intro, next, prev, togglePlay, stopPlay, startPlay, resetStep, restart, replayGate,
-    cur: () => ST.cur, isLive,
+    TITLES, view, goTo, snap, intro, next, prev, resetStep, restart, replayGate,
+    cur: () => ST.cur, isLive, seqPos, seqNext, seqPrev,
     /** Re-render the current step from scratch (after the plan/scene changed). */
     refresh() { snap(Math.max(0, ST.cur)); },
   };

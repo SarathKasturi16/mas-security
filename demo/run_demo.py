@@ -14,6 +14,7 @@ CLI and the browser GUI (demo/server.py) consume it, so they never drift.
 from __future__ import annotations
 
 import argparse
+import logging
 import random
 from collections.abc import Iterator
 from pathlib import Path
@@ -22,10 +23,11 @@ import networkx as nx
 
 from demo.agents import Agent, make_backend
 from demo.guards_live import GuardEnsemble
-from demo.target_mock import get_target_output, is_compromised
+from demo.target_mock import CANARY, get_preset, get_target_output, is_compromised
 from engine.manifest import load_manifest
 from engine.pipeline import build_plan
 
+log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = REPO_ROOT / "manifests" / "pentest7_poc.json"  # cwd-independent
 
@@ -45,6 +47,9 @@ def iter_run(
     guard_model: str = "heuristic",
     seed: int = 0,
     deadline_s: float | None = None,
+    payload_text: str | None = None,
+    preset: str | None = None,
+    canary: str = CANARY,
 ) -> Iterator[dict]:
     """Run the pipeline, yielding JSON-safe events as each step happens.
 
@@ -58,6 +63,11 @@ def iter_run(
     (one budget unit = one guard) under the ``"any"`` rule. Guards are *ingress*
     guards: the ensemble audits the node's input before the agent runs, and a
     blocked input is replaced by a sanitized ContextWipe summary.
+
+    The target content the entry agents read is, in priority order: ``payload_text``
+    (custom attacker text), the ``preset`` id from ``demo.target_mock.PRESETS``, or
+    the default scan (``clean`` selects the uninjected one). ``canary`` is the goal
+    token whose presence means an agent obeyed (compromise checks, stub, guards).
     """
     mpath = Path(manifest_path) if manifest_path is not None else MANIFEST
     m = load_manifest(mpath)
@@ -69,7 +79,17 @@ def iter_run(
         v: [c["id"] for c in plan["checkpoints"] if v in c["nodes"]] for v in m.nodes
     }
 
-    backend = make_backend(backend_name)
+    if payload_text is not None:
+        target_text, preset_id, payload_kind = payload_text, "custom", "custom"
+    elif preset is not None:
+        target_text, preset_id = get_preset(preset, canary), preset
+        payload_kind = "clean" if preset == "clean" else "poisoned"
+    else:
+        preset_id = "clean" if clean else "nmap_banner"
+        target_text = get_target_output(clean=clean)
+        payload_kind = "clean" if clean else "poisoned"
+
+    backend = make_backend(backend_name, canary=canary)
     if deadline_s is not None and hasattr(backend, "deadline"):
         import time
         backend.deadline = time.monotonic() + deadline_s   # whole-run cap for live LLMs
@@ -83,8 +103,10 @@ def iter_run(
         "type": "run_start",
         "mode": "defended" if defended else "undefended",
         "backend": getattr(backend, "name", "?"),
-        "payload": "clean" if clean else "poisoned",
-        "payload_text": get_target_output(clean=clean),  # the actual target content read at entry
+        "payload": payload_kind,                # "clean" | "poisoned" | "custom"
+        "payload_text": target_text,            # the actual target content read at entry
+        "preset": preset_id,                    # PRESETS id, or "custom"
+        "canary": canary,
         "order": order,
         "guarded": sorted(guarded),
         "plan": plan,
@@ -112,7 +134,7 @@ def iter_run(
     for node in order:
         preds = list(m.graph.predecessors(node))
         if not preds:                                   # entry agent reads the target
-            upstream = get_target_output(clean=clean)
+            upstream = target_text
         else:
             upstream = "\n".join(outputs[p] for p in preds)[:MAX_HANDOFF_CHARS]
 
@@ -129,7 +151,7 @@ def iter_run(
             k = node_guards[node]
             guards = GuardEnsemble(
                 k=k, backend=backend, models=guard_models, rule="any",
-                guard_model=guard_model, p0=plan["p0"], rng=rng,
+                guard_model=guard_model, p0=plan["p0"], rng=rng, canary=canary,
             )
             guard_error = False
             try:
@@ -171,7 +193,10 @@ def iter_run(
             out = Agent(node, backend).run(agent_input)
             error = False
         except Exception as e:  # noqa: BLE001 - surface to the UI, keep going
-            out = f"[{node}] backend error: {type(e).__name__}: {e}"
+            # Only the status code reaches the browser; provider details stay in the server log.
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            out = f"[{node}] backend error" + (f" (HTTP {status})" if status else f" ({type(e).__name__})")
+            log.warning("agent %s backend error: %r", node, e)
             error = True
 
         outputs[node] = out
@@ -180,7 +205,7 @@ def iter_run(
             "node": node,
             "label": label,
             "output": out,
-            "compromised": is_compromised(out),
+            "compromised": is_compromised(out, canary),
             "wiped": wiped,
             "agent_input": agent_input,
             "error": error,
@@ -189,8 +214,8 @@ def iter_run(
 
     yield {
         "type": "run_end",
-        "orch_pwned": is_compromised(outputs.get("orchestrator", "")),
-        "rep_pwned": is_compromised(outputs.get("reporter", "")),
+        "orch_pwned": is_compromised(outputs.get("orchestrator", ""), canary),
+        "rep_pwned": is_compromised(outputs.get("reporter", ""), canary),
         "blocked_at": blocked_at,
     }
 
