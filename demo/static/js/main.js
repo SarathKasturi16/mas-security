@@ -87,17 +87,73 @@
     });
   }
 
+  /** Compact progress (shown instead of the dots on narrow windows). */
+  function updateProgress(n, run) {
+    const last = A.LAST_STEP;
+    $("prog-txt").textContent = `Step ${n} / ${last}`;
+    $("prog-fill").style.width = (100 * n / last) + "%";
+    const bar = $("prog-bar");
+    bar.setAttribute("aria-valuenow", String(n));
+    bar.setAttribute("aria-valuetext", `Step ${n} of ${last}: ${A.steps.TITLES[n] || ""}`);
+    bar.setAttribute("aria-disabled", String(!!run));
+  }
+
+  function wireProgress() {
+    const bar = $("prog-bar");
+    bar.addEventListener("click", (e) => {
+      if (st.running) return;
+      const r = bar.getBoundingClientRect();
+      if (r.width <= 0) return;
+      const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      A.steps.goTo(Math.round(f * A.LAST_STEP));
+    });
+    bar.addEventListener("keydown", (e) => {
+      if (st.running) return;
+      const n = A.steps.cur();
+      let to = null;
+      if (e.key === "Home") to = 0;
+      else if (e.key === "End") to = A.LAST_STEP;
+      else if (e.key === "ArrowUp" || e.key === "PageUp") to = Math.min(A.LAST_STEP, n + 1);
+      else if (e.key === "ArrowDown" || e.key === "PageDown") to = Math.max(0, n - 1);
+      if (to === null) return;       // Left/Right are handled by the global step shortcuts
+      e.preventDefault(); A.steps.goTo(to);
+    });
+  }
+
+  /** Settings popover (used when the strip is collapsed on narrow windows). */
+  function wireSettings() {
+    const btn = $("btn-settings"), strip = $("strip");
+    const isOpen = () => strip.classList.contains("open");
+    function setOpen(on, refocus) {
+      strip.classList.toggle("open", on);
+      btn.setAttribute("aria-expanded", String(on));
+      if (on) { const f = strip.querySelector("input:not([disabled]), select:not([disabled]), button:not([disabled])"); if (f) f.focus(); }
+      else if (refocus) btn.focus();
+    }
+    btn.addEventListener("click", () => setOpen(!isOpen(), true));
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && isOpen()) { e.stopPropagation(); setOpen(false, true); }
+    }, true);
+    document.addEventListener("pointerdown", (e) => {
+      if (isOpen() && !strip.contains(e.target) && !btn.contains(e.target)) setOpen(false, false);
+    }, true);
+    window.addEventListener("resize", () => { if (isOpen() && !btn.offsetParent) setOpen(false, false); });
+  }
+
   function updateButtons() {
     const n = A.steps.cur(), mode = A.LIVE_STEPS[n];
     const run = !!st.running;
     document.querySelector(".hdr").classList.toggle("busy", run);
     $("btn-prev").disabled = n <= 0 || run;
+    updateProgress(n, run);
     document.querySelectorAll("#dots .dot").forEach((d) => { d.disabled = run; });
     const waiting = !!mode && !st.done[mode];
     $("next-label").textContent = waiting ? "Run" : "Next";
     $("btn-next").classList.toggle("run-primary", waiting);
     $("btn-next").disabled = run || (n >= A.LAST_STEP);
     $("play-label").textContent = st.playing ? "Pause" : "Play";
+    $("btn-play").setAttribute("aria-label", st.playing ? "Pause" : "Play");
+    $("btn-next").setAttribute("aria-label", waiting ? "Run this step" : "Next step");
     for (const id of ["btn-run-u", "btn-run-d", "btn-run-b"]) $(id).disabled = run;
     for (const id of ["sel-manifest", "rng-budget", "alloc-risk", "alloc-uniform", "sel-backend", "sel-guard", "num-seed", "tg-clean"]) $(id).disabled = run;
     $("btn-run-u").classList.toggle("run-primary", n === 12 && !st.done.undefended);
@@ -105,6 +161,7 @@
   }
 
   function wire() {
+    wireProgress(); wireSettings();
     $("btn-prev").addEventListener("click", () => A.steps.prev());
     $("btn-next").addEventListener("click", () => A.steps.next());
     $("btn-play").addEventListener("click", () => A.steps.togglePlay());

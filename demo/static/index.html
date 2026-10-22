@@ -10,7 +10,7 @@
 <div class="app" id="app">
 
   <header class="hdr">
-    <h1>Stopping Prompt-Injection Worms</h1>
+    <h1><span class="t-long">Stopping Prompt-Injection Worms</span><span class="t-short">Stopping Worms</span></h1>
     <div class="cfg" role="group" aria-label="Scenario">
       <label class="fld">Team
         <select id="sel-manifest" aria-label="Agent team (manifest)"></select>
@@ -42,19 +42,23 @@
 
   <nav class="ctl" aria-label="Step controller">
     <div class="ctl-l">
-      <button type="button" class="btn" id="btn-prev"><span class="ic" aria-hidden="true">&#9664;</span> Prev</button>
-      <button type="button" class="btn primary" id="btn-play"><span class="ic" aria-hidden="true">&#9654;</span> <span id="play-label">Play</span></button>
-      <button type="button" class="btn" id="btn-next"><span id="next-label">Next</span> <span class="ic" aria-hidden="true">&#9654;</span></button>
+      <button type="button" class="btn" id="btn-prev" aria-label="Previous step"><span class="ic" aria-hidden="true">&#9664;</span><span class="lbl">Prev</span></button>
+      <button type="button" class="btn primary" id="btn-play" aria-label="Play"><span class="ic" aria-hidden="true">&#9654;</span><span class="lbl" id="play-label">Play</span></button>
+      <button type="button" class="btn" id="btn-next" aria-label="Next step"><span class="lbl" id="next-label">Next</span><span class="ic" aria-hidden="true">&#9654;</span></button>
     </div>
     <ol class="dots" id="dots" aria-label="Steps"></ol>
+    <div class="prog" id="prog">
+      <span class="prog-txt" id="prog-txt">Step 0 / 14</span>
+      <div class="prog-bar" id="prog-bar" role="slider" tabindex="0" aria-label="Step progress" aria-valuemin="0" aria-valuemax="14" aria-valuenow="0" aria-valuetext="Step 0 of 14"><div class="prog-fill" id="prog-fill"></div></div>
+    </div>
     <div class="ctl-r" id="run-group" role="group" aria-label="Live runs">
-      <button type="button" class="btn danger" id="btn-run-u">Run undefended</button>
-      <button type="button" class="btn safe" id="btn-run-d">Run defended</button>
-      <button type="button" class="btn" id="btn-run-b">Run both</button>
+      <button type="button" class="btn danger" id="btn-run-u"><span class="x-long">Run undefended</span><span class="x-short">Undefended</span></button>
+      <button type="button" class="btn safe" id="btn-run-d"><span class="x-long">Run defended</span><span class="x-short">Defended</span></button>
+      <button type="button" class="btn" id="btn-run-b"><span class="x-long">Run both</span><span class="x-short">Both</span></button>
     </div>
   </nav>
 
-  <section class="strip" aria-label="Settings">
+  <section class="strip" id="strip" aria-label="Settings">
     <label class="fld">Speed
       <input id="rng-speed" type="range" min="0.5" max="2" step="0.25" value="1" aria-label="Animation speed">
       <output id="out-speed" for="rng-speed">1.0x</output>
@@ -77,9 +81,12 @@
   </section>
 
   <footer class="tabbar">
-    <button type="button" class="logtab" id="btn-log" aria-expanded="false" aria-controls="drawer">
-      <span class="ic" aria-hidden="true" id="log-ic">&#9650;</span> Logs <span class="cnt" id="log-count">0</span>
-    </button>
+    <div class="tabs-l">
+      <button type="button" class="logtab" id="btn-log" aria-expanded="false" aria-controls="drawer">
+        <span class="ic" aria-hidden="true" id="log-ic">&#9650;</span> Logs <span class="cnt" id="log-count">0</span>
+      </button>
+      <button type="button" class="btn sm btn-settings" id="btn-settings" aria-expanded="false" aria-controls="strip"><span aria-hidden="true">&#9881;</span> Settings</button>
+    </div>
     <span class="keys">&#8592; &#8594; step &middot; Space next &middot; P play &middot; L logs &middot; R reduce motion</span>
   </footer>
 
