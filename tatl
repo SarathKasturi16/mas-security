@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Terminal front end for the demo: ./tatl --help
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE" && exec "$HERE/.venv/bin/python" -m demo.cli "$@"

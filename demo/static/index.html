@@ -20,7 +20,7 @@
         <select id="sel-manifest" aria-label="Agent team (manifest)"></select>
       </label>
       <label class="fld">Budget B
-        <input id="rng-budget" type="range" min="3" max="30" step="1" value="10" aria-label="Guard budget">
+        <input id="rng-budget" type="range" min="3" max="15" step="1" value="10" aria-label="Guard budget">
         <output id="out-budget" for="rng-budget">10</output>
       </label>
       <div class="seg" role="radiogroup" aria-label="Allocation">
@@ -89,9 +89,12 @@
 
   <!-- Attack lab: log viewer below the stage -->
   <section class="lab-only logview" id="logview" aria-label="Agent output log viewer">
+    <div class="lv-grip" id="lv-grip" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize the log viewer (drag, or use the up and down arrow keys)" title="Drag to resize"></div>
     <div class="lv-top">
       <h2>Agent output log viewer</h2>
       <div class="lv-ctl">
+        <button type="button" class="tx" id="log-expand">[expand all]</button>
+        <button type="button" class="tx" id="log-collapse">[collapse all]</button>
         <button type="button" class="tx" id="log-wrap" aria-pressed="false">[wrap: off]</button>
         <button type="button" class="tx" id="log-filter">[filter: all]</button>
         <button type="button" class="tx" id="log-save">[save .json]</button>

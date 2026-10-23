@@ -15,12 +15,12 @@
   // ---------------------------------------------------------------- plan loading
   /** Fetch the plan; if the budget is below the number of checkpoints, raise it until accepted. */
   async function fetchPlan() {
-    let b = Math.min(st.budget, 30), lastErr = null;
-    for (let i = 0; i < 28 && b <= 30; i++, b++) {
+    let b = Math.min(st.budget, 15), lastErr = null;
+    for (let i = 0; i < 13 && b <= 15; i++, b++) {
       try { return await A.api.plan(st.manifest, b, st.alloc); }
       catch (e) { lastErr = e; if (e.http !== 400) throw e; }
     }
-    throw lastErr || new Error("No feasible guard budget (3-30) for this team");
+    throw lastErr || new Error("No feasible guard budget (3-15) for this team");
   }
 
   // Last selection the server accepted; the controls roll back to it if a new request fails.
@@ -75,20 +75,8 @@
     catch (e) { fatalScreen("Could not load the plan (kept the previous one): " + e.message); }
   }
 
-  /** The Groq runs are capped server-side; keep the slider inside that cap in the lab (synchronous). */
-  function capBudget() {
-    const cap = st.tab === "lab" && st.backend === "groq" ? A.LIVE_BUDGET_MAX : 30;
-    $("rng-budget").max = String(cap);
-    if (st.budget > cap) st.budget = cap;
-  }
-  /** Apply the cap and redraw the plan when it no longer matches the controls. */
-  async function applyBudgetCap() {
-    capBudget();
-    if (!planMatches()) await reload();
-  }
-
   A.main = {
-    reload, applyBudgetCap, planPending,
+    reload, planPending,
     /** Used by live runs when the server's run uses a different manifest/budget/split than the one shown. */
     async syncPlan(o) {
       if (o.manifest) st.manifest = o.manifest;
@@ -138,24 +126,17 @@
     $("btn-prev").disabled = A.steps.seqPrev(n) < 0;
     $("btn-next").disabled = A.steps.seqNext(n) < 0;
     for (const id of ["rng-budget", "alloc-risk", "alloc-uniform"]) $(id).disabled = run;
-    $("sel-manifest").disabled = run || lab;
-    $("sel-manifest").title = lab ? "The Attack lab uses the 7-agent pentest team (the only team with live agents)" : "";
+    $("sel-manifest").disabled = run;
+    $("sel-manifest").title = lab ? "The Attack lab runs the team selected here" : "";
   }
 
   // ---------------------------------------------------------------- tabs
-  // What the Algorithm tab had when the lab was entered; restored synchronously on the way back so that a quick
-  // lab -> algo -> lab sequence never stashes the lab's own values.
-  let algoStep = 0, algoManifest = null, algoBudget = null, tabSeq = 0;
+  // The Algorithm tab's step, remembered while the lab is open. Team, budget and split are shared by both tabs.
+  let algoStep = 0, tabSeq = 0;
 
   function stashAlgo() {
-    if (algoManifest !== null) return;
     const c = A.steps.cur();
     if (A.steps.seqPos(c) >= 0) algoStep = c;
-    algoManifest = st.manifest; algoBudget = st.budget;
-  }
-  function restoreAlgo() {
-    if (algoManifest !== null) { st.manifest = algoManifest; st.budget = algoBudget; }
-    algoManifest = null; algoBudget = null;
   }
 
   function paintTab(tab) {
@@ -171,14 +152,11 @@
   async function showTab(tab, my, algoTarget) {
     const stale = () => my !== tabSeq || st.tab !== tab;
     if (tab === "lab") {
-      st.manifest = A.LIVE_MANIFEST;
-      capBudget();
       if (!planMatches()) await loadPlan(false);
       if (stale()) return false;
       await A.lab.enter();
       return !stale();
     }
-    capBudget();
     if (!planMatches()) await loadPlan(false);
     if (stale()) return false;
     if (algoTarget) algoTarget();
@@ -191,7 +169,7 @@
     const my = ++tabSeq;
     if (st.tab === "lab") A.lab.leave();                       // stops a run in flight (logs "run stopped" once)
     if (st.running) A.live.abort();
-    if (tab === "lab") stashAlgo(); else restoreAlgo();
+    if (tab === "lab") stashAlgo();
     st.tab = tab;
     paintTab(tab);
     if (!fromHash) {
@@ -227,8 +205,7 @@
     $("sel-manifest").addEventListener("change", (e) => { st.manifest = e.target.value; reload(); });
     $("rng-budget").addEventListener("input", (e) => { $("out-budget").textContent = e.target.value; });
     $("rng-budget").addEventListener("change", (e) => {
-      const cap = parseInt($("rng-budget").max, 10) || 30;
-      st.budget = Math.max(A.minBudget(), Math.min(cap, parseInt(e.target.value, 10) || st.budget));
+      st.budget = Math.max(A.minBudget(), Math.min(15, parseInt(e.target.value, 10) || st.budget));
       reload();
     });
     for (const [id, v] of [["alloc-risk", "risk"], ["alloc-uniform", "uniform"]]) {
@@ -297,7 +274,7 @@
     const wantLab = location.hash === "#lab" || stepParam === 12 || stepParam === 13;
     if (wantLab) {
       stashAlgo();
-      st.tab = "lab"; st.manifest = A.LIVE_MANIFEST; paintTab("lab"); capBudget();
+      st.tab = "lab"; paintTab("lab");
     }
     let plan;
     try { plan = await loadPlan(false); }

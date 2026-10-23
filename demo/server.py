@@ -15,6 +15,7 @@ MAS_ALLOW_LIVE kill switch (off by default when hosted).
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import logging
 import os
@@ -26,9 +27,8 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
-from demo.agents import make_backend
+from demo.agents import ROLE_PROMPTS, build_role_prompt, make_backend
 from demo.run_demo import iter_run
-from demo.agents import ROLE_PROMPTS
 from demo.target_mock import CANARY, PRESETS, get_preset
 from engine.manifest import load_manifest
 from engine.pipeline import ALLOCS, build_plan
@@ -37,8 +37,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 MANIFEST_DIR = Path(__file__).resolve().parent.parent / "manifests"
 DEFAULT_MANIFEST = "pentest7_poc"
 DEFAULT_PORT = 8770
-BUDGET_MIN, BUDGET_MAX = 3, 30
-LIVE_BUDGET_MAX = 6           # live run = 7 agent calls + up to this many guard calls
+BUDGET_MIN, BUDGET_MAX = 3, 15
 LIVE_DEADLINE_S = 100.0       # whole-run time limit for live LLM runs
 GUARD_MODELS = ("heuristic", "sim")
 BACKENDS = ("stub", "groq")
@@ -46,7 +45,11 @@ MODES = ("undefended", "defended")
 MAX_PAYLOAD_CHARS = 2000      # custom Attack-lab payload text (after stripping)
 MAX_BODY_BYTES = 16 * 1024    # POST /api/run body cap
 GOAL_TOKEN_RE = re.compile(r"[\x21-\x7e]{8,48}")   # printable ASCII, no spaces
-_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # control chars except \n and \t
+# Control chars except \n and \t, plus C1, bidi overrides and zero-width chars (log spoofing).
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+# Live runs only accept a token shaped like the stock one, so the token cannot
+# smuggle free-form instructions into the paid model calls.
+LIVE_TOKEN_RE = re.compile(r"\[\[[A-Za-z0-9:_-]{4,40}\]\]")
 
 log = logging.getLogger(__name__)
 
@@ -149,11 +152,19 @@ def _clean_payload(raw) -> str:
     return text
 
 
+@functools.lru_cache(maxsize=1)
 def _normal_traffic() -> str:
-    """Text agents produce or read on a clean run; a goal token found in it would
-    mark honest output as compromised."""
+    """Text agents produce or read on a clean run (any team); a goal token found in it
+    would mark honest output as compromised."""
     stub = "[x] processed upstream hand-off; forwarding findings. [ContextWipe] Untrusted hand-off"
-    return "\n".join([get_preset("clean"), stub, *ROLE_PROMPTS.values()]).lower()
+    parts = [get_preset("clean"), stub, *ROLE_PROMPTS.values()]
+    for path in MANIFEST_PATHS.values():
+        m = load_manifest(path)
+        for v in m.nodes:
+            label = m.graph.nodes[v].get("label", v)
+            parts += [f"[{v}]", label, build_role_prompt(label, entry=True, critical=False),
+                      build_role_prompt(label, entry=False, critical=True)]
+    return "\n".join(parts).lower()
 
 
 def _goal_token(raw) -> str:
@@ -237,7 +248,8 @@ def api_targets() -> Response:
 def api_run() -> Response:
     """SSE stream of the demo pipeline for the requested mode/backend.
 
-    GET takes query params; POST takes the same fields as a JSON object plus the
+    GET takes query params (``manifest`` picks the team, default pentest7_poc; budget
+    3..15 for every backend); POST takes the same fields as a JSON object plus the
     Attack-lab extras ``preset``, ``payload`` (custom text, overrides preset) and
     ``goal_token`` (custom canary).
     """
@@ -263,10 +275,10 @@ def api_run() -> Response:
         backend = _choice(src, "backend", BACKENDS, "stub")
         if backend != "stub" and request.method != "POST":
             raise BadParam("live LLM runs must be started with POST")
+        manifest = _choice(src, "manifest", MANIFEST_PATHS, DEFAULT_MANIFEST)
         alloc = _choice(src, "alloc", ALLOCS, "risk")
         guard_model = _choice(src, "guard_model", GUARD_MODELS, "heuristic")
-        hi = BUDGET_MAX if backend == "stub" else LIVE_BUDGET_MAX
-        budget = _int_param(src, "budget", BUDGET_MIN, hi, None)
+        budget = _int_param(src, "budget", BUDGET_MIN, BUDGET_MAX, None)
         seed = _int_param(src, "seed", 0, 10**6, 0)
         if request.method == "POST":
             if src.get("payload") is not None:
@@ -277,11 +289,14 @@ def api_run() -> Response:
                     raise BadParam(f"invalid preset {preset!r}; allowed: {list(PRESETS)}")
             canary = _goal_token(src.get("goal_token", CANARY))
         # Validate budget vs. checkpoint count before streaming starts.
-        build_plan(MANIFEST_PATHS[DEFAULT_MANIFEST], budget=budget, alloc=alloc, with_sim=False)
+        build_plan(MANIFEST_PATHS[manifest], budget=budget, alloc=alloc, with_sim=False)
     except (BadParam, ValueError) as e:
         return _bad(str(e))
 
     live = backend != "stub"
+    if live and not LIVE_TOKEN_RE.fullmatch(canary):
+        return _bad("live runs need a goal token shaped like [[MY-TOKEN-1]] "
+                    "(letters, digits, : _ - inside double brackets)")
     if live and payload_text is not None:
         # Free text on our key would make this a public LLM proxy; presets only.
         resp = jsonify({"error": "custom payloads run on the offline stub; Groq runs only the built-in targets"})
@@ -308,7 +323,7 @@ def api_run() -> Response:
         try:
             for ev in iter_run(
                 defended=mode == "defended", backend_name=backend, clean=clean,
-                manifest_path=MANIFEST_PATHS[DEFAULT_MANIFEST],
+                manifest_path=MANIFEST_PATHS[manifest],
                 alloc=alloc, budget=budget, guard_model=guard_model, seed=seed,
                 deadline_s=LIVE_DEADLINE_S if live else None,
                 payload_text=payload_text, preset=preset, canary=canary,

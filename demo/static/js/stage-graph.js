@@ -223,8 +223,10 @@
     dim:     { stroke: C.edge, w: 2.5, dash: "none", op: 0.25, mk: "ah" },
     cut:     { stroke: C.block, w: 3, dash: "6 6", op: 1, mk: "ah-cut" },
     entry:   { stroke: C.st.entry.stroke, w: 3, dash: "9 6", op: 1, mk: "ah-entry" },
+    fb:      { stroke: C.edge, w: 2.5, dash: "3 8", op: 0.75, mk: "ah" },      // feedback edge: drawn, not run
   };
   function edgeStyle(e, style, dur, tl, at) {
+    if (e.fb && (style === "default" || style === "dim")) style = "fb";
     const s = EDGE_STYLE[style];
     e.style = style;
     A.when(dur ? tl : null, at, () => {

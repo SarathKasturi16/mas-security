@@ -16,26 +16,76 @@ from __future__ import annotations
 import argparse
 import logging
 import random
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import networkx as nx
 
-from demo.agents import Agent, make_backend
+from demo.agents import (
+    GROQ_GUARD_MODELS, ROLE_PROMPTS, Agent, build_role_prompt, classify_error,
+    GuardCallCap, make_backend, make_guard_backend,
+)
 from demo.guards_live import GuardEnsemble
 from demo.target_mock import CANARY, get_preset, get_target_output, is_compromised
-from engine.manifest import load_manifest
+from engine.manifest import Manifest, load_manifest
 from engine.pipeline import build_plan
 
 log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = REPO_ROOT / "manifests" / "pentest7_poc.json"  # cwd-independent
-
-# Distinct models per guard when the provider offers them (heterogeneous vote).
-GROQ_GUARD_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
+MANIFEST_DIR = REPO_ROOT / "manifests"
+MANIFEST = MANIFEST_DIR / "pentest7_poc.json"  # cwd-independent
 # Bounds LLM inputs along the graph. Each agent reply is capped at 400 tokens (~1.6k chars),
 # so 6000 fits three upstream replies whole; a lower cap cut the last one off mid-text.
 MAX_HANDOFF_CHARS = 6000
+# A checkpoint's guards run at each of its agents, so guard calls can exceed B;
+# this bounds the paid guard calls one run can make (beyond it guards fail closed).
+MAX_LIVE_GUARD_CALLS = 36   # >= the most any team needs at B=15 (33)
+
+
+def run_order(m: Manifest) -> tuple[list[str], list[tuple[str, str]]]:
+    """Order in which to run every agent once, plus the edges that are not run.
+
+    Entry agents read the target, so edges *into* them are dropped; any DFS back-edge
+    left (walking from the entries) is dropped too, and what remains is topologically
+    sorted. Returns ``(order, feedback_edges)``; feedback edges are drawn but never
+    feed an agent's input (loops run in one pass). A DAG with no edge into an entry
+    agent is returned unchanged.
+    """
+    g = m.graph
+    feedback = [(u, v) for u, v in g.edges if v in m.entry]
+    h = g.copy()
+    h.remove_edges_from(feedback)
+    state: dict[str, int] = {}          # absent = new, 1 = on the DFS stack, 2 = done
+    for root in [*m.entry, *h.nodes]:
+        if root in state:
+            continue
+        state[root] = 1
+        stack = [(root, iter(list(h.successors(root))))]
+        while stack:
+            u, it = stack[-1]
+            for w in it:
+                if state.get(w) == 1:               # back-edge: closes a cycle
+                    feedback.append((u, w))
+                elif w not in state:
+                    state[w] = 1
+                    stack.append((w, iter(list(h.successors(w)))))
+                    break
+            else:
+                state[u] = 2
+                stack.pop()
+    h.remove_edges_from(feedback)
+    return list(nx.topological_sort(h)), feedback
+
+
+def _role_instr(m: Manifest, node: str, has_preds: bool) -> str | None:
+    """Prompt for a node without a hand-written one (None = Agent uses ROLE_PROMPTS)."""
+    if node in ROLE_PROMPTS:
+        return None
+    return build_role_prompt(
+        m.graph.nodes[node].get("label", node),
+        entry=node in m.entry or not has_preds, critical=node in m.critical,
+    )
 
 
 def iter_run(
@@ -52,6 +102,7 @@ def iter_run(
     payload_text: str | None = None,
     preset: str | None = None,
     canary: str = CANARY,
+    guard_backend: str = "auto",
 ) -> Iterator[dict]:
     """Run the pipeline, yielding JSON-safe events as each step happens.
 
@@ -70,6 +121,13 @@ def iter_run(
     (custom attacker text), the ``preset`` id from ``demo.target_mock.PRESETS``, or
     the default scan (``clean`` selects the uninjected one). ``canary`` is the goal
     token whose presence means an agent obeyed (compromise checks, stub, guards).
+
+    Every agent runs once, in :func:`run_order`; feedback edges are reported in
+    ``run_start`` but never feed an input. ``guard_backend`` (``auto|gemini|groq|
+    heuristic``) picks where live guards run, separate from the agent backend, and
+    guards are called a few at a time, stopping after the first BLOCK (those never
+    called vote ``None``). ``deadline_s`` is a whole-run limit: anything not yet run
+    when it passes is reported as skipped (``error_kind="timeout"``).
     """
     mpath = Path(manifest_path) if manifest_path is not None else MANIFEST
     m = load_manifest(mpath)
@@ -92,14 +150,22 @@ def iter_run(
         payload_kind = "clean" if clean else "poisoned"
 
     backend = make_backend(backend_name, canary=canary)
-    if deadline_s is not None and hasattr(backend, "deadline"):
-        import time
-        backend.deadline = time.monotonic() + deadline_s   # whole-run cap for live LLMs
-    guard_models: tuple[str, ...] = ()
-    if getattr(backend, "provider", None) == "groq":
-        guard_models = GROQ_GUARD_MODELS
+    deadline_at = time.monotonic() + deadline_s if deadline_s is not None else None
+    if deadline_at is not None and hasattr(backend, "deadline"):
+        backend.deadline = deadline_at         # whole-run cap for live LLMs
+    g_backend, guard_models = make_guard_backend(guard_backend, backend)
+    if g_backend is not None and getattr(g_backend, "name", "") != "stub":
+        g_backend = GuardCallCap(g_backend, MAX_LIVE_GUARD_CALLS)
+    if deadline_at is not None and hasattr(g_backend, "deadline"):
+        g_backend.deadline = deadline_at
+    if g_backend is None:
+        guard_label = "heuristic"
+    else:
+        guard_label = getattr(g_backend, "name", "?") if len(guard_models) <= 1 else f"{g_backend.provider}:{len(guard_models)} models"
     rng = random.Random(seed)
-    order = list(nx.topological_sort(m.graph))
+    order, feedback = run_order(m)
+    skipped_edges = set(feedback)
+    run_preds = {n: [p for p in m.graph.predecessors(n) if (p, n) not in skipped_edges] for n in m.nodes}
 
     yield {
         "type": "run_start",
@@ -110,6 +176,9 @@ def iter_run(
         "preset": preset_id,                    # PRESETS id, or "custom"
         "canary": canary,
         "order": order,
+        "feedback_edges": [{"from": u, "to": v} for u, v in feedback],
+        "critical": list(m.critical),
+        "guard_backend": guard_label,
         "guarded": sorted(guarded),
         "plan": plan,
         "alloc": alloc,
@@ -134,7 +203,7 @@ def iter_run(
     outputs: dict[str, str] = {}
     blocked_at: list[str] = []
     for node in order:
-        preds = list(m.graph.predecessors(node))
+        preds = run_preds[node]
         if not preds:                                   # entry agent reads the target
             upstream = target_text
         else:
@@ -152,33 +221,40 @@ def iter_run(
         if defended and node in guarded:
             k = node_guards[node]
             guards = GuardEnsemble(
-                k=k, backend=backend, models=guard_models, rule="any",
+                k=k, backend=g_backend, models=guard_models, rule="any",
                 guard_model=guard_model, p0=plan["p0"], rng=rng, canary=canary,
+                deadline=deadline_at,
             )
-            guard_error = False
+            guard_error, error_kind = False, None
             try:
+                if deadline_at is not None and time.monotonic() > deadline_at:
+                    raise TimeoutError("run time limit reached")
                 block, votes = guards.blocks(upstream)
-            except Exception:  # noqa: BLE001 - a broken guard must not wave traffic through
+            except Exception as e:  # noqa: BLE001 - a broken guard must not wave traffic through
                 # Fail closed (input is still wiped) but report it as an error, not as
-                # a detection: it must never count towards "attack stopped".
-                block, votes, guard_error = True, [True] * k, True
+                # a detection: it must never count towards "attack stopped". Votes are
+                # None (no usable verdict), never BLOCK.
+                block, votes, guard_error = True, [None] * k, True
+                error_kind = classify_error(e)
+                log.warning("guards at %s failed: %r", node, e)
             if guard_model == "sim":
                 used = ["sim"] * k
-            elif guard_models:
-                used = [guard_models[i % len(guard_models)] for i in range(k)]
+            elif g_backend is not None:
+                used = guards.models_for(k)
             else:
-                used = ["stub"] * k
+                used = ["stub" if getattr(backend, "name", "") == "stub" else "heuristic"] * k
             yield {
                 "type": "guard_vote",
                 "node": node,
                 "direction": "incoming",
-                "votes": votes,
+                "votes": votes,            # True = BLOCK, False = PASS, None = not called
                 "models": used,
                 "blocked": block,
                 "checkpoint": node_cps[node],
                 "k": k,
                 "rule": "any",
                 "guard_error": guard_error,
+                "error_kind": error_kind,
             }
             if block:
                 agent_input = (
@@ -191,15 +267,19 @@ def iter_run(
                 wiped = True
 
         # A backend error (e.g. Groq 429 after retries) must not abort the run.
-        try:
-            out = Agent(node, backend).run(agent_input)
-            error = False
-        except Exception as e:  # noqa: BLE001 - surface to the UI, keep going
-            # Only the status code reaches the browser; provider details stay in the server log.
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            out = f"[{node}] backend error" + (f" (HTTP {status})" if status else f" ({type(e).__name__})")
-            log.warning("agent %s backend error: %r", node, e)
-            error = True
+        error_kind = None
+        if deadline_at is not None and time.monotonic() > deadline_at:
+            out, error, error_kind = f"[{node}] skipped: run time limit", True, "timeout"
+        else:
+            try:
+                out = Agent(node, backend, _role_instr(m, node, bool(preds))).run(agent_input)
+                error = False
+            except Exception as e:  # noqa: BLE001 - surface to the UI, keep going
+                # Only the status code reaches the browser; provider details stay in the server log.
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                out = f"[{node}] backend error" + (f" (HTTP {status})" if status else f" ({type(e).__name__})")
+                log.warning("agent %s backend error: %r", node, e)
+                error, error_kind = True, classify_error(e)
 
         outputs[node] = out
         yield {
@@ -211,13 +291,19 @@ def iter_run(
             "wiped": wiped,
             "agent_input": agent_input,
             "error": error,
+            "error_kind": error_kind,       # null | rate_limit | timeout | auth | other
             "upstream": preds,
         }
 
+    compromised = [n for n in order if is_compromised(outputs[n], canary)]
+    critical_pwned = any(c in compromised for c in m.critical)
     yield {
         "type": "run_end",
-        "orch_pwned": is_compromised(outputs.get("orchestrator", ""), canary),
-        "rep_pwned": is_compromised(outputs.get("reporter", ""), canary),
+        "compromised": compromised,
+        "critical": list(m.critical),
+        "critical_pwned": critical_pwned,
+        "orch_pwned": critical_pwned,       # kept for older consumers
+        "rep_pwned": "reporter" in compromised,
         "blocked_at": blocked_at,
     }
 
@@ -241,8 +327,8 @@ def run(defended: bool, backend_name: str | None, clean: bool = False) -> dict:
             print(f"  {ev['node']:>12}:{flag} {shown}{note}")
         elif ev["type"] == "run_end":
             summary = ev
-            print(f"\n  orchestrator compromised: {ev['orch_pwned']} | "
-                  f"reporter compromised: {ev['rep_pwned']}")
+            print(f"\n  critical agent(s) {ev['critical']} compromised: {ev['critical_pwned']} | "
+                  f"all compromised: {ev['compromised']}")
             if ev["blocked_at"]:
                 print(f"  blocked at: {ev['blocked_at']}")
             print()

@@ -212,7 +212,7 @@ def test_api_run_bad(client, qs):
 
 
 def test_api_run_live_budget_capped(client):
-    # paid backends are capped at LIVE_BUDGET_MAX guards; rejected before any LLM call
+    # budget 3..15 for every backend; a live run still needs POST
     assert client.get("/api/run?mode=defended&backend=groq&budget=7").status_code == 400
 
 

@@ -44,7 +44,7 @@
 
     /**
      * Start a run with POST /api/run and read the SSE frames from the response body.
-     * `o`: {mode, backend, alloc, budget, guardModel, seed, goalToken, preset | payload}.
+     * `o`: {mode, backend, manifest, alloc, budget, guardModel, seed, goalToken, preset | payload}.
      * Callbacks: onEvent(obj), onDone(), onRefused(status, message)  (HTTP error, sent before any stream),
      * onUnreachable() (no HTTP answer at all), onError(message) (the stream broke part-way).
      * Returns {close()}.
@@ -56,6 +56,7 @@
         mode: o.mode, backend: o.backend, alloc: o.alloc, budget: o.budget,
         guard_model: o.guardModel, seed: o.seed, goal_token: o.goalToken,
       };
+      if (o.manifest) body.manifest = o.manifest;
       if (typeof o.payload === "string") body.payload = o.payload; else body.preset = o.preset;
       const finish = (fn) => { if (!ended) { ended = true; fn(); } };
 

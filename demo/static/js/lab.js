@@ -10,6 +10,8 @@
   const TOKEN_RE = /^[\x21-\x7e]{8,48}$/;           // the server also rejects tokens that occur in normal agent traffic
   const TOKEN_MSG = "Use a distinctive token, 8-48 characters with a symbol, e.g. [[MY-TOKEN-1]]";
   const STUB_ONLY_MSG = "custom payload: running on offline stub (Groq runs only the built-in targets)";
+  const LIVE_TOKEN_RE = /^\[\[[A-Za-z0-9:_-]{4,40}\]\]$/;     // the server's stricter rule for live (Groq) runs
+  const LIVE_TOKEN_MSG = "Live runs need a token like [[MY-TOKEN-1]] (letters, digits, : _ - inside double brackets)";
   const validToken = (t) => TOKEN_RE.test(t) && /[^A-Za-z0-9]/.test(t);
 
   const L = {
@@ -39,6 +41,7 @@
     if (!text.trim()) return "The payload is empty.";
     if (text.length > MAX_PAYLOAD) return `The payload is over ${MAX_PAYLOAD} characters.`;
     if (!validToken(tok)) return TOKEN_MSG;
+    if ($("lab-backend").value === "groq" && unedited() && !LIVE_TOKEN_RE.test(tok)) return LIVE_TOKEN_MSG;   // custom text runs on the stub
     return "";
   }
 
@@ -135,14 +138,16 @@
   // ---------------------------------------------------------------- running
   function buildRequest(mode, backend) {
     const text = $("lab-payload").value;
-    const cap = backend === "groq" ? A.LIVE_BUDGET_MAX : 30;        // the server caps non-stub runs
     const req = {
-      mode, backend, alloc: st.alloc, budget: Math.min(st.budget, cap), guardModel: st.guardModel, seed: st.seed,
+      mode, backend, manifest: st.manifest, alloc: st.alloc, budget: st.budget, guardModel: st.guardModel, seed: st.seed,
       goalToken: $("lab-token").value,
     };
     if (unedited()) req.preset = L.presetId; else req.payload = text;
     return req;
   }
+
+  /** An older server does not know the `manifest` field. For the default team that is harmless: retry without it. */
+  const rejectsManifest = (r) => !!r && r.status === 400 && /manifest/i.test(r.message || "") && st.manifest === "pentest7_poc";
 
   async function run() {
     if (L.busy || st.running || !A.scene || planPending() || check()) return;
@@ -158,6 +163,11 @@
       const first = backend;
       let res = await A.live.start(buildRequest(mode, backend));
       if (my !== L.runId) return;                       // stopped while it was starting
+      if (rejectsManifest(res.refused)) {
+        const req = buildRequest(mode, backend); delete req.manifest;
+        res = await A.live.start(req);
+        if (my !== L.runId) return;
+      }
       if (res.refused && first === "groq" && canFallBack(res.refused)) {
         A.logs.note(`groq unavailable: ${res.refused.message}; using offline stub`);
         res = await A.live.start(buildRequest(mode, "stub"));
@@ -187,7 +197,7 @@
     $("lab-preset").addEventListener("change", (e) => setPreset(e.target.value));
     $("lab-payload").addEventListener("input", refresh);
     $("lab-token").addEventListener("input", onToken);
-    $("lab-backend").addEventListener("change", (e) => { st.backend = e.target.value; refresh(); A.main.applyBudgetCap(); });
+    $("lab-backend").addEventListener("change", (e) => { st.backend = e.target.value; refresh(); });
     $("lab-guard").addEventListener("change", (e) => { st.guardModel = e.target.value; });
     $("lab-seed").addEventListener("change", (e) => {
       st.seed = Math.max(0, Math.min(1000000, parseInt(e.target.value, 10) || 0)); e.target.value = String(st.seed);
@@ -196,7 +206,15 @@
     $("lab-run").addEventListener("click", run);
     $("lab-stop").addEventListener("click", stop);
     A.on("runstate", refresh);
-    A.on("plan", refresh);
+    A.on("plan", () => {
+      // The team or budget changed in the lab: the scene was rebuilt, so show the lab view of it again.
+      if (st.tab === "lab" && L.entered && !st.running && !L.busy && A.scene) {
+        A.showVerdict(null); $("stage-msg").hidden = true;
+        A.live.markFeedback();
+        A.steps.goTo(L.defence ? 13 : 12, { snap: true });
+      }
+      refresh();
+    });
     A.on("planstate", refresh);
   }
 
@@ -211,11 +229,12 @@
       if (st.tab !== "lab") return;                     // the user went back to the Algorithm tab meanwhile
       L.entered = true;
       A.showVerdict(null); $("stage-msg").hidden = true;
-      if (A.scene) A.steps.goTo(L.defence ? 13 : 12, { snap: true });
+      if (A.scene) { A.live.markFeedback(); A.steps.goTo(L.defence ? 13 : 12, { snap: true }); }
       refresh();
     },
     leave() {
       if (L.busy || st.running) stop();
+      if (A.scene) for (const e of A.scene.edges) if (e.fb) { e.fb = false; A.G.edgeStyle(e, "default", 0); }   // dashed only in the lab
       A.showVerdict(null); $("stage-msg").hidden = true;
     },
     refresh, setDefence,

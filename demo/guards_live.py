@@ -12,6 +12,8 @@ the hand-off is BLOCKED and the runtime applies a ContextWipe.
 from __future__ import annotations
 
 import random
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from demo.target_mock import CANARY
@@ -63,6 +65,8 @@ class GuardEnsemble:
     p0: float = 0.3
     rng: random.Random | None = None
     canary: str = CANARY            # goal token the heuristic guards look for
+    workers: int = 3                # live guards called in parallel, one batch at a time
+    deadline: float | None = None   # time.monotonic() cut-off; no new batch after it
 
     def __post_init__(self) -> None:
         if self.k < 1:
@@ -75,26 +79,66 @@ class GuardEnsemble:
             self.rng = random.Random()
         self._signals = _signals(self.canary)
 
-    def _votes(self, text: str) -> list[bool]:
-        """Return each guard's BLOCK vote (True = BLOCK)."""
+    def models_for(self, k: int | None = None) -> list[str]:
+        """Model id of each guard: the one that answered when known (a fallback
+        backend may hand a guard to another provider), else the intended one."""
+        models = self.models or (getattr(self.backend, "model", None) or "guard",)
+        used = getattr(self, "_used", {})
+        return [used.get(i, models[i % len(models)]) for i in range(k or self.k)]
+
+    def _live_votes(self, text: str) -> list[bool | None]:
+        """Call live guards a batch at a time (``workers`` in parallel).
+
+        Under the ``"any"`` rule one BLOCK fixes the verdict, so no further batch is
+        launched after the first batch containing a BLOCK; guards never called get
+        ``None``. Under ``"majority"`` all guards run (one batch).
+        """
+        self._used: dict[int, str] = {}
+        models = self.models_for()
+        size = min(self.k, max(1, self.workers))
+        votes: list[bool | None] = [None] * self.k
+
+        def ask(i: int) -> bool:
+            if hasattr(self.backend, "complete_used"):
+                ans, self._used[i] = self.backend.complete_used(
+                    f"guard::{_GUARD_PROMPT}", text, model=models[i], index=i)
+            else:
+                ans = self.backend.complete(f"guard::{_GUARD_PROMPT}", text, model=models[i])
+            if not ans.strip():     # no verdict (e.g. reasoning ate the tokens): not a PASS
+                raise RuntimeError(f"guard {i + 1} gave an empty reply")
+            return "BLOCK" in ans.upper()
+
+        for start in range(0, self.k, size):
+            if self.deadline is not None and time.monotonic() > self.deadline:
+                raise TimeoutError("run time limit reached")
+            idx = range(start, min(start + size, self.k))
+            errors: list[BaseException] = []
+            with ThreadPoolExecutor(max_workers=len(idx)) as pool:
+                futures = {i: pool.submit(ask, i) for i in idx}
+                for i, f in futures.items():
+                    try:
+                        votes[i] = f.result()
+                    except Exception as e:  # noqa: BLE001 - decided below
+                        errors.append(e)
+            if self.rule == "any" and any(votes[i] for i in idx):
+                break                     # one BLOCK decides; a sibling's error doesn't matter
+            if errors:
+                raise errors[0]           # no verdict from this batch: the caller fails closed
+        return votes
+
+    def _votes(self, text: str) -> list[bool | None]:
+        """Return each guard's BLOCK vote (True = BLOCK, None = not called)."""
         if self.guard_model == "sim":
             malicious = any(sig(text) for sig in self._signals)
             return [malicious and self.rng.random() < self.p0 for _ in range(self.k)]
         if self.backend is None or getattr(self.backend, "name", "") == "stub":
             return [self._signals[i % len(self._signals)](text) for i in range(self.k)]
-        votes = []
-        models = self.models or (self.backend.model,)
-        for i in range(self.k):
-            ans = self.backend.complete(
-                f"guard::{_GUARD_PROMPT}", text, model=models[i % len(models)]
-            )
-            votes.append("BLOCK" in ans.upper())
-        return votes
+        return self._live_votes(text)
 
-    def blocks(self, text: str) -> tuple[bool, list[bool]]:
-        """(ensemble verdict is BLOCK?, individual votes)."""
+    def blocks(self, text: str) -> tuple[bool, list[bool | None]]:
+        """(ensemble verdict is BLOCK?, individual votes; ``None`` = guard not called)."""
         votes = self._votes(text)
         if self.rule == "any":
             return (any(votes), votes)
         threshold = self.k // 2 + 1
-        return (sum(votes) >= threshold, votes)
+        return (sum(bool(v) for v in votes) >= threshold, votes)

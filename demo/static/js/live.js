@@ -17,8 +17,11 @@
     tl.play(0);
   });
   const nodeOf = (id) => A.scene && A.scene.nodes[id];
-  const succ = (id) => A.scene.edges.filter((e) => e.from === id).map((e) => e.to);
-  const preds = (id) => A.scene.edges.filter((e) => e.to === id).map((e) => e.from);
+  // Feedback edges are drawn but never run, so they do not count as hand-offs.
+  const succ = (id) => A.scene.edges.filter((e) => e.from === id && !e.fb).map((e) => e.to);
+  const preds = (id) => A.scene.edges.filter((e) => e.to === id && !e.fb).map((e) => e.from);
+  const labelOf = (id) => { const n = A.scene && A.scene.plan.nodes.find((x) => x.id === id); return (n && n.label) || id; };
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
   const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
   // ---------------------------------------------------------------- UI chrome
@@ -32,8 +35,14 @@
   A.showVerdict = showVerdict;
 
   // ---------------------------------------------------------------- pieces drawn in the stage
-  function chipEl(vote, model, compact) {
+  function chipEl(vote, model, compact, isErr) {
     const gg = svg("g");
+    if (vote == null) {                               // not called (earlier BLOCK), or the guard call itself failed (isErr)
+      gg.append(svg("circle", { r: compact ? 17 : 14, fill: "#fff", stroke: C.ink3 || "#5F6B7A", "stroke-width": 2, "stroke-dasharray": "4 3" }),
+        svg("text", { y: 6, "text-anchor": "middle", "font-size": 18, "font-weight": 700, fill: C.ink3 || "#5F6B7A" }, isErr ? "!" : "-"));
+      gg.appendChild(svg("title", null, model + (isErr ? ": guard error" : ": not needed (already blocked)")));
+      return gg;
+    }
     if (compact) {
       gg.append(svg("circle", { r: 17, fill: vote ? C.block : "#fff", stroke: vote ? C.block : C.pass, "stroke-width": 2.5 }));
       A.icon(gg, vote ? "x" : "check", 0, 0, 20, vote ? "#fff" : C.pass);
@@ -54,7 +63,6 @@
     return gg;
   }
 
-  const LIVE_TEAM_NOTE = "Live run uses the 7-agent pentest team (the only team with live agents)";
   const preview = (text, canary, n) => {
     const t = (text || "").replace(/\s+/g, " ").trim();
     if (t.length <= n) return t;
@@ -78,17 +86,26 @@
     const manifestDiff = !!pl.manifest && pl.manifest !== A.state.manifest;
     const planDiff = !!sp && ((ev.budget != null && ev.budget !== sp.budget) || (!!ev.alloc && ev.alloc !== sp.alloc));
     if (manifestDiff || planDiff) {
-      if (manifestDiff) A.logs.note(LIVE_TEAM_NOTE + ` (switching from ${A.state.manifest} to ${pl.manifest})`, ev);
+      if (manifestDiff) A.logs.note(`The server ran team ${pl.manifest}, not ${A.state.manifest}; showing that team instead.`, ev);
       await A.main.syncPlan({ manifest: pl.manifest, budget: ev.budget, alloc: ev.alloc });
       if (ctx.my !== token) return null;             // aborted / superseded while the plan loaded
     }
+    // Feedback edges (loops back to an earlier agent) are drawn dashed; the run is one pass and never follows them.
+    const fbList = Array.isArray(ev.feedback_edges) ? ev.feedback_edges : [];
+    fbCache[A.scene.plan.manifest || A.state.manifest] = fbList;
+    markFeedback(fbList);
+    ctx.guardBackend = ev.guard_backend || "";
     A.steps.snap(ctx.step);
+    ctx.preset = ev.preset || "";
     ctx.guardedSet = new Set(ctx.guarded.length ? ctx.guarded : A.scene.guarded);
     A.G.compact(false, 0);
     ctx.runNo = A.logs.beginRun({
-      mode: ctx.mode, backend: ev.backend || ctx.req.backend, preset: ev.preset || "recorded",
-      guardModel: ev.guard_model || ctx.req.guardModel, budget: ev.budget, alloc: ev.alloc, goalToken: ctx.canary,
+      manifest: pl.manifest || A.state.manifest, mode: ctx.mode, backend: ev.backend || ctx.req.backend, preset: ev.preset || "recorded",
+      guardModel: ev.guard_backend || ev.guard_model || ctx.req.guardModel, budget: ev.budget, alloc: ev.alloc, goalToken: ctx.canary,
     });
+    if (fbList.length) {
+      A.logs.line({ kind: "sys", segs: [["feedback (not run): ", "dim"], [fbList.map((e) => e.from + " -> " + e.to).join(", "), null], ["  drawn dashed; this run goes through the team once", "dim"]] }, null);
+    }
     const tl = gsap.timeline();
     const sc = A.scene;
     if (!A.rm()) tl.fromTo(sc.websiteG, { scale: 0.96 }, { scale: 1, duration: 0.4, ease: "power2.out", transformOrigin: "50% 50%" }, 0);
@@ -100,7 +117,7 @@
   const STATION_BACK = 74;                           // viewBox units before the arrow tip
   function incomingEdge(id, sources) {
     const sc = A.scene;
-    return (sources && sources[0]) || sc.edges.find((e) => e.to === id) || sc.webEdges.find((w) => w.to === id) || null;
+    return (sources && sources[0]) || sc.edges.find((e) => e.to === id && !e.fb) || sc.webEdges.find((w) => w.to === id) || null;
   }
   function stationOf(edge) {
     let len = 200;
@@ -119,6 +136,50 @@
     return g;
   }
 
+  // ---------------------------------------------------------------- feedback edges
+  const fbCache = {};                                  // team id -> feedback_edges from the last run_start for that team
+
+  /** The server's run_order, client side: edges into entry agents, plus DFS back-edges from the entries
+   *  (entries in manifest order, successors in edge order). Returns [{from,to}]. */
+  function computeFeedback(plan) {
+    const entry = new Set(plan.nodes.filter((n) => n.entry).map((n) => n.id));
+    const fb = [], keep = [];
+    for (const e of plan.edges) (entry.has(e.to) ? fb : keep).push({ from: e.from, to: e.to });
+    const adj = {};
+    for (const e of keep) (adj[e.from] = adj[e.from] || []).push(e.to);
+    const state = {};                                  // 1 = on the DFS stack, 2 = done
+    const visit = (u) => {
+      state[u] = 1;
+      for (const v of adj[u] || []) {
+        if (state[v] === 1) fb.push({ from: u, to: v });
+        else if (!state[v]) visit(v);
+      }
+      state[u] = 2;
+    };
+    for (const n of plan.nodes) if (entry.has(n.id) && !state[n.id]) visit(n.id);
+    return fb;
+  }
+
+  /** Flag the scene's feedback edges (list, or the cached/computed set for the current team) and restyle all edges. */
+  function markFeedback(list) {
+    const sc = A.scene;
+    if (!sc) return;
+    const fb = list || fbCache[sc.plan.manifest || A.state.manifest] || computeFeedback(sc.plan);
+    const keys = new Set(fb.map((e) => e.from + ">" + e.to));
+    for (const e of sc.edges) {
+      const on = keys.has(e.from + ">" + e.to);
+      if (on !== !!e.fb) { e.fb = on; A.G.edgeStyle(e, e.style === "dim" ? "dim" : "default", 0); }
+    }
+  }
+
+  /** The INPUT box: where the text came from, how long it is, and the text itself. */
+  function inputPart(node, text, ctx, upstream) {
+    const t = text || "";
+    const from = Array.isArray(upstream) ? upstream : preds(node);
+    const src = from.length ? "from " + from.join(", ") : (ctx.preset && ctx.preset !== "custom" ? "from target: " + ctx.preset : "from target: custom payload");
+    return { head: `${src} (${t.length.toLocaleString("en-US")} chars)`, text: t };
+  }
+
   function onAgentStart(ev, ctx) {
     const sc = A.scene, nv = nodeOf(ev.node);
     ctx.inputs[ev.node] = ev.input;
@@ -128,13 +189,13 @@
     const from = pr.length ? pr.join(", ") : "target";
     A.logs.line({
       kind: "agent", src: ev.node, tag: "IN", text: `<- ${from} (${len} chars)`,
-      full: "input:\n" + (ev.input || ""),
+      detail: { type: "agent", token: ctx.canary, input: inputPart(ev.node, ev.input, ctx, ev.upstream) },
     }, ev);
     if (!nv) return null;
     const tl = gsap.timeline();
     if (!guarded) A.G.setState(nv, "active", 0.3, tl, 0);
     let sources = [];
-    if (pr.length) sources = sc.edges.filter((e) => e.to === ev.node && ctx.infected.has(e.from));
+    if (pr.length) sources = sc.edges.filter((e) => e.to === ev.node && !e.fb && ctx.infected.has(e.from));
     else if (ctx.payload !== "clean") sources = sc.webEdges.filter((w) => w.to === ev.node);
     const toks = []; let end = 0.45;
     const rec = { toks, edges: sources, station: null };
@@ -165,22 +226,37 @@
   function onVote(ev, ctx) {
     const sc = A.scene, nv = nodeOf(ev.node);
     const votes = ev.votes || [], k = ev.k || votes.length, models = ev.models || [];
-    const blocks = votes.filter(Boolean).length, cps = (ev.checkpoint || []).join("+") || "checkpoint";
-    const det = votes.map((v, i) => `G${i + 1}${models[i] ? " (" + models[i] + ")" : ""}: ${v ? "BLOCK" : "PASS"}`);
-    det.push(`rule=${ev.rule || "any"}  direction=${ev.direction || "incoming"}`);
+    const blocks = votes.filter((v) => v === true).length, called = votes.filter((v) => v != null).length;
+    // null means "not needed" only when the guards ran; with guard_error every vote is null because the call failed.
+    const skipped = ev.guard_error ? 0 : k - called;
+    const errKind = ev.error_kind || "other";
+    const cps = (ev.checkpoint || []).join("+") || "checkpoint";
     ctx.votes[ev.node] = ev;
     const voteSegs = [];
-    votes.forEach((v, i) => { if (i) voteSegs.push([" ", null]); voteSegs.push([v ? "BLOCK" : "PASS", v ? "st-block" : "st-pass"]); });
-    const head = `${cps} ${k} guard${k === 1 ? "" : "s"}: `;
+    votes.forEach((v, i) => {
+      if (i) voteSegs.push([" ", null]);
+      voteSegs.push(v == null ? [ev.guard_error ? "ERR" : "-", "dim"] : [v ? "BLOCK" : "PASS", v ? "st-block" : "st-pass"]);
+    });
+    const head = `${cps} ${plural(k, "guard")}: `;
+    const rule = ev.rule || "any";
+    const ruleText = `Checkpoint ${cps} (${ev.direction || "incoming"} hand-off), rule "${rule}": ` +
+      (rule === "any" ? "any guard says BLOCK -> input wiped (ContextWipe). Once one guard blocks, the rest are not called."
+        : "the guards' votes are combined by this rule.") + ` Result: ${ev.guard_error ? "error, input wiped" : ev.blocked ? "blocked, input wiped" : "passed"}.`;
+    const detail = {
+      type: "guard", checkpoint: cps, ruleText,
+      backend: ev.guard_backend || ctx.guardBackend || "",
+      rows: votes.map((v, i) => ({ n: i + 1, model: models[i] || "", vote: v, err: ev.guard_error ? errKind : "" })),
+      errorText: ev.guard_error ? "A guard call failed (" + errKind + "). The check fails closed: the input is wiped, and this does not count as a detection." : "",
+    };
     if (ev.guard_error) {
       A.logs.line({
         kind: "guard", src: ev.node, tag: "GUARD", status: ["ERROR", "st-block"],
-        segs: [[head + "backend error -> failed closed, input wiped, not counted as a detection", null]], full: det.join("\n"),
+        segs: [[head + `guard error (${errKind}) -> failed closed, input wiped, not counted as a detection`, null]], detail,
       }, ev);
     } else {
       A.logs.line({
-        kind: "guard", src: ev.node, tag: "GUARD", full: det.join("\n"),
-        segs: [[head, null], ...voteSegs, [ev.blocked ? " -> blocked, ContextWipe" : " -> passed", null]],
+        kind: "guard", src: ev.node, tag: "GUARD", detail,
+        segs: [[head, null], ...voteSegs, [ev.blocked ? " -> blocked, ContextWipe" : " -> passed", null], ...(skipped ? [[`  (${skipped} not needed)`, "dim"]] : [])],
       }, ev);
     }
     if (!nv) return null;
@@ -199,7 +275,7 @@
     votes.forEach((v, i) => {
       const r = Math.floor(i / perRow), c = i - r * perRow, inRow = Math.min(perRow, k - r * perRow);
       const x = cx + (c - (inRow - 1) / 2) * cell, y = gy0 + r * cell + cell / 2;
-      const ch = chipEl(v, models[i] || "guard " + (i + 1), true);
+      const ch = chipEl(v == null ? null : !!v, models[i] || "guard " + (i + 1), true, !!ev.guard_error);
       if (cell < 40) ch.setAttribute("transform", "scale(0.82)");
       const wrap = mkG(sc.L.tmp); wrap.appendChild(ch);
       gsap.set(wrap, { x, y: y + (above ? 8 : -8), autoAlpha: 0 });
@@ -208,7 +284,8 @@
     });
     const tChips = 0.3 + (A.rm() ? 0 : 0.09 * (k - 1));
     const tVerdict = tChips + 0.35;
-    const label = ev.guard_error ? "GUARD ERROR (fail-closed)" : ev.blocked ? `BLOCKED ${blocks}/${k}` : `PASSED ${blocks}/${k}`;
+    const label = ev.guard_error ? "GUARD ERROR (fail-closed)"
+      : ev.blocked ? (skipped ? `BLOCKED (${called} of ${k} called)` : `BLOCKED ${blocks}/${k}`) : `PASSED ${blocks}/${k}`;
     const bw = A.textW(label, 22, 700) + 84, by = above ? gy0 - 30 : gy0 + gh + 30;
     const banner = bannerEl(label, ev.blocked, bw);
     sc.L.tmp.appendChild(banner);
@@ -241,17 +318,41 @@
     return padTo(tl, end);
   }
 
+  const ERROR_TEXT = {
+    rate_limit: "The LLM provider's free-tier rate limit was hit, so this agent produced no reply. Wait a minute or use a lower budget.",
+    timeout: "The LLM provider did not answer in time, so this agent produced no reply. Try the run again.",
+    auth: "The LLM provider rejected the server's API key, so this agent produced no reply. The key may be missing, wrong or expired.",
+    other: "The LLM provider returned an error, so this agent produced no reply.",
+  };
+  /** Plain-words explanation for a failed agent call, followed by the raw status the server reported. */
+  function explainError(ev) {
+    const raw = (ev.output || "").trim();
+    let kind = ev.error_kind;
+    if (!ERROR_TEXT[kind]) {                           // older server: guess from the raw text
+      kind = /429|rate/i.test(raw) ? "rate_limit" : /timeout|timed out/i.test(raw) ? "timeout" : /\b40[13]\b|auth/i.test(raw) ? "auth" : "other";
+    }
+    if (/time limit|TimeoutError/i.test(raw)) return { text: "Skipped: the run's time limit (100 s) was reached before this agent could finish.", raw };
+    return { text: ERROR_TEXT[kind], raw };
+  }
+
   function onOutput(ev, ctx) {
     const sc = A.scene, nv = nodeOf(ev.node);
     const out = succ(ev.node);
-    const full = ev.wiped && ev.agent_input
-      ? "input (after ContextWipe):\n" + ev.agent_input + "\n\nblocked hand-off:\n" + (ctx.inputs[ev.node] || "") + "\n\noutput:\n" + (ev.output || "")
-      : "input:\n" + (ctx.inputs[ev.node] || "") + "\n\noutput:\n" + (ev.output || "");
+    const received = typeof ev.agent_input === "string" ? ev.agent_input : (ctx.inputs[ev.node] || "");
+    const detail = { type: "agent", token: ctx.canary, input: inputPart(ev.node, received, ctx, ev.upstream), output: { head: `${(ev.output || "").length.toLocaleString("en-US")} chars`, text: ev.output || "" } };
+    if (ev.wiped) {
+      detail.wipeNote = "A guard blocked the hand-off, so this agent was given a clean summary instead of the original text.";
+      if (typeof ev.agent_input === "string" && ctx.inputs[ev.node] != null && ctx.inputs[ev.node] !== ev.agent_input) {
+        detail.alt = inputPart(ev.node, ctx.inputs[ev.node], ctx, ev.upstream);
+        detail.alt.head += ", blocked";
+      }
+    }
+    if (ev.error) detail.error = explainError(ev);
     const segs = [[`"${preview(ev.output, ctx.canary, 110)}"`, null]];
     if (ev.wiped) segs.push(["  (input wiped)", "dim"]);
     if (out.length === 0) segs.push(["  (end of chain)", "dim"]);
     const status = ev.error ? ["ERROR", "st-block"] : ev.compromised ? ["COMPROMISED", "st-bad"] : ["CLEAN", "st-pass"];
-    A.logs.line({ kind: "agent", src: ev.node, tag: "OUT", segs, status, full }, ev);
+    A.logs.line({ kind: "agent", src: ev.node, tag: "OUT", segs, status, detail }, ev);
     if (ev.compromised && !ev.wiped) ctx.infected.add(ev.node);
     if (!nv) return null;
 
@@ -292,9 +393,16 @@
   function onRunEnd(ev, ctx) {
     const blocked = ev.blocked_at || [];
     const cpOf = (id) => { const v = ctx.votes[id]; return v && v.checkpoint && v.checkpoint.length ? ` (${v.checkpoint.join("+")})` : ""; };
-    const pwned = [];
-    if (ev.orch_pwned) pwned.push("orchestrator");
-    if (ev.rep_pwned) pwned.push("reporter");
+    // Newer servers send the compromised and critical agents of the team; older ones only orch_pwned / rep_pwned.
+    const crit = Array.isArray(ev.critical) ? ev.critical : [];
+    let pwned = [];
+    if (Array.isArray(ev.compromised) && Array.isArray(ev.critical)) {
+      pwned = crit.filter((id) => ev.compromised.includes(id)).map(labelOf);
+    } else {
+      if (ev.orch_pwned) pwned.push("orchestrator");
+      if (ev.rep_pwned) pwned.push("reporter");
+    }
+    const critNames = crit.length ? crit.map(labelOf).join(", ") : "orchestrator";
     const stopped = blocked.map((id) => id + cpOf(id)).join(", ");
     let verdict, segs;
     if (pwned.length) {
@@ -304,11 +412,11 @@
       if (stopped) segs.push([`; attack stopped at ${stopped}`, null]);
     } else if (blocked.length) {
       verdict = "attack stopped at " + stopped;
-      segs = [[verdict + "; orchestrator ", null], ["clean", "st-pass"]];
+      segs = [[verdict + "; " + critNames + " ", null], ["clean", "st-pass"]];
     } else if (ctx.infected.size) {
       const who = [...ctx.infected].join(", ");
-      verdict = `${who} compromised; the attack did not reach the orchestrator`;
-      segs = [[who + " ", null], ["COMPROMISED", "st-bad"], ["; orchestrator ", null], ["clean", "st-pass"]];
+      verdict = `${who} compromised; the attack did not reach ${critNames}`;
+      segs = [[who + " ", null], ["COMPROMISED", "st-bad"], ["; " + critNames + " ", null], ["clean", "st-pass"]];
     } else {
       verdict = "no agent compromised";
       segs = [["no agent compromised", "st-pass"]];
@@ -411,6 +519,7 @@
         if (my === token) { A.state.running = false; A.emit("runstate"); }
       }
     },
+    markFeedback, computeFeedback,
     abort() {
       token++;
       if (activeTl) activeTl.kill();
